@@ -8,7 +8,10 @@ import JSZip from 'jszip';
 import MarkdownPreview from './MarkdownPreview';
 import anime from 'animejs';
 import { HistoryManager, useHistoryManager, HistoryState } from './HistoryManager';
-
+// 在 MarkdownEditor.tsx 顶部，修改导入语句
+import { convertToWebP, isImageFile, isWebPFile, generateWebPFileName } from "../utils/imageconvert";
+import ImageConversionDialog from './ImageConversionDialog';
+import FileContextMenu from './FileContextMenu';
 
 // 扩展类型定义
 interface WorkspaceFile {
@@ -69,8 +72,13 @@ const MarkdownEditor: React.FC = () => {
     const [isDragging, setIsDragging] = useState<boolean>(false); // 是否正在拖拽
     const [isProcessing, setIsProcessing] = useState<boolean>(false); // 是否正在处理中
     const [missingResources, setMissingResources] = useState<MissingResource[]>([]); // 缺失的资源列表
-    const [contextMenu, setContextMenu] = useState<ContextMenuState>({ show: false, x: 0, y: 0 }); // 右键菜单状态
-    
+    // 替换原有的 contextMenu 状态
+    const [contextMenu, setContextMenu] = useState<{
+      show: boolean;
+      x: number;
+      y: number;
+      file?: WorkspaceFile;
+    }>({ show: false, x: 0, y: 0 });
     const [tabs, setTabs] = useState<Tab[]>([]); // 标签页列表
     const [activeTab, setActiveTab] = useState<string>(''); // 当前激活的标签页
 
@@ -78,6 +86,17 @@ const MarkdownEditor: React.FC = () => {
     const editorRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const resourceInputRef = useRef<HTMLInputElement>(null);
+
+    const [imageConversionDialog, setImageConversionDialog] = useState<{
+      isOpen: boolean;
+      file: File | null;
+      pendingFiles: File[];
+    }>({
+      isOpen: false,
+      file: null,
+      pendingFiles: [],
+    });
+  
     
     // 初始化历史管理器
     const {
@@ -90,11 +109,11 @@ const MarkdownEditor: React.FC = () => {
     } = useHistoryManager('');
 
 
-    // 生成默认模板
-    const generateDefaultTemplate = () => {
-        const now = new Date();
-        const dateStr = now.toISOString().slice(0, 19).replace('T', ' ');
-        return `---
+    // Example of proper indentation
+const generateDefaultTemplate = () => {
+  const now = new Date();
+  const dateStr = now.toISOString().slice(0, 19).replace('T', ' ');
+  return `---
 categories:
 - 
 date: ${dateStr}
@@ -106,7 +125,205 @@ title:
 ---
 
 `;
-    };
+};
+
+      /// 修改处理图片文件的函数
+
+      const processImageFile = async (file: File, shouldConvertToWebP: boolean = false): Promise<WorkspaceFile> => {
+        if (shouldConvertToWebP && !isWebPFile(file)) {
+          try {
+            const { webpBlob, quality } = await convertToWebP(file);
+            const webpFileName = generateWebPFileName(file.name);
+            
+            // 使用 Blob 而不是 File
+            const buffer = await webpBlob.arrayBuffer();
+            return {
+              name: webpFileName,
+              type: 'image',
+              content: buffer
+            };
+          } catch (error) {
+            console.error('Failed to convert image:', error);
+            // 如果转换失败，回退到原始文件
+            const buffer = await file.arrayBuffer();
+            return {
+              name: file.name,
+              type: 'image',
+              content: buffer
+            };
+          }
+        } else {
+          const buffer = await file.arrayBuffer();
+          return {
+            name: file.name,
+            type: 'image',
+            content: buffer
+          };
+        }
+      };
+  
+// 修改 handleDeleteFile 函数
+const handleDeleteFile = (fileName: string) => {
+  // 如果是当前打开的文件，先关闭标签页
+  if (currentFile === fileName) {
+    closeTab(fileName);
+  }
+  
+  // 更新文件列表
+  setFiles(prev => prev.filter(f => f.name !== fileName));
+  
+  // 如果是图片文件，检查并更新所有markdown文件中的引用
+  const deletedFile = files.find(f => f.name === fileName);
+  if (deletedFile?.type === 'image') {
+    setFiles(prev => prev.map(file => {
+      if (file.type === 'markdown') {
+        const content = String(file.content);
+        // 更新图片引用
+        const updatedContent = content.replace(
+          new RegExp(`!\\[.*?\\]\\(${fileName}\\)`, 'g'),
+          '![图片已删除]()'
+        );
+        // 更新封面图引用
+        const lines = updatedContent.split('\n');
+        const photosIndex = lines.findIndex(line => line.trim() === 'photos:');
+        if (photosIndex !== -1 && lines[photosIndex + 1].includes(fileName)) {
+          lines[photosIndex + 1] = '- ';
+        }
+        return {
+          ...file,
+          content: lines.join('\n')
+        };
+      }
+      return file;
+    }));
+    
+    // 如果当前打开的文件是markdown，更新编辑器内容
+    if (currentFile && files.find(f => f.name === currentFile)?.type === 'markdown') {
+      const currentContent = content;
+      const updatedContent = currentContent.replace(
+        new RegExp(`!\\[.*?\\]\\(${fileName}\\)`, 'g'),
+        '![图片已删除]()'
+      );
+      setContent(updatedContent);
+    }
+  }
+  
+  // 如果删除的是最后一个文件，清理历史记录状态
+  if (files.length === 1) {
+    addHistory('', 0);
+  }
+};
+// 重命名文件
+const handleRenameFile = (oldName: string, newName: string) => {
+  // 如果新文件名已存在，显示错误
+  if (files.some(f => f.name === newName)) {
+    alert('文件名已存在！');
+    return;
+  }
+  
+  // 更新文件列表
+  setFiles(prev => prev.map(file => {
+    if (file.name === oldName) {
+      return { ...file, name: newName };
+    }
+    
+    // 如果是markdown文件，更新其中的引用
+    if (file.type === 'markdown') {
+      const content = String(file.content);
+      // 更新图片引用
+      const updatedContent = content.replace(
+        new RegExp(`!\\[.*?\\]\\(${oldName}\\)`, 'g'),
+        `![${newName.split('.')[0]}](${newName})`
+      );
+      // 更新封面图引用
+      const lines = updatedContent.split('\n');
+      const photosIndex = lines.findIndex(line => line.trim() === 'photos:');
+      if (photosIndex !== -1 && lines[photosIndex + 1].includes(oldName)) {
+        lines[photosIndex + 1] = `- ${newName}`;
+      }
+      return {
+        ...file,
+        content: lines.join('\n')
+      };
+    }
+    
+    return file;
+  }));
+  
+  // 更新标签页
+  if (files.find(f => f.name === oldName)?.type === 'markdown') {
+    setTabs(prev => prev.map(tab => 
+      tab.id === oldName
+        ? { ...tab, id: newName, fileName: newName }
+        : tab
+    ));
+    
+    if (currentFile === oldName) {
+      setCurrentFile(newName);
+      setActiveTab(newName);
+    }
+  }
+  
+  // 如果当前打开的是markdown文件，更新其内容中的引用
+  if (currentFile && files.find(f => f.name === currentFile)?.type === 'markdown') {
+    const updatedContent = content.replace(
+      new RegExp(`!\\[.*?\\]\\(${oldName}\\)`, 'g'),
+      `![${newName.split('.')[0]}](${newName})`
+    );
+    setContent(updatedContent);
+  }
+};
+  // 修改图片转换确认处理函数
+  const handleImageConversionConfirm = async () => {
+    const { pendingFiles } = imageConversionDialog;
+    setIsProcessing(true);
+    
+    try {
+      for (const file of pendingFiles) {
+        const processedFile = await processImageFile(file, true);
+        // 更新文件列表
+        setFiles(prev => {
+          // 检查是否已存在同名文件
+          const existingIndex = prev.findIndex(f => f.name === processedFile.name);
+          if (existingIndex >= 0) {
+            // 如果存在，替换它
+            return prev.map((f, index) => 
+              index === existingIndex ? processedFile : f
+            );
+          }
+          // 如果不存在，添加新文件
+          return [...prev, processedFile];
+        });
+        
+        // 更新缺失资源列表
+        setMissingResources(prev => 
+          prev.filter(resource => resource.name !== processedFile.name)
+        );
+      }
+    } catch (error) {
+      console.error('Error processing images:', error);
+      alert('转换图片时发生错误，请重试');
+    } finally {
+      setIsProcessing(false);
+      setImageConversionDialog({ isOpen: false, file: null, pendingFiles: [] });
+    }
+  };
+
+  // 处理图片转换取消
+  const handleImageConversionCancel = async () => {
+    const { pendingFiles } = imageConversionDialog;
+    
+    for (const file of pendingFiles) {
+      const processedFile = await processImageFile(file, false);
+      setFiles(prev => [...prev, processedFile]);
+      
+      setMissingResources(prev => 
+        prev.filter(resource => resource.name !== processedFile.name)
+      );
+    }
+    
+    setImageConversionDialog({ isOpen: false, file: null, pendingFiles: [] });
+  };
 
      // 链接格式化工具函数
      const formatLinkContent = (content: string): { url: string; extractionCode: string; title: string } | null => {
@@ -312,48 +529,53 @@ title:
         e.dataTransfer.setData('application/json', JSON.stringify(file));
     };
 
-    // 处理文件拖放
-    const handleEditorDrop = (e: React.DragEvent) => {
-        e.preventDefault();
-        setIsDragging(false);
+    // 修改 handleEditorDrop 函数
+const handleEditorDrop = async (e: React.DragEvent) => {
+  e.preventDefault();
+  setIsDragging(false);
 
-        // 获取拖拽的文件信息
-        const fileData = e.dataTransfer.getData('application/json');
-        if (fileData) {
-            try {
-                const file = JSON.parse(fileData) as WorkspaceFile;
-                if (file.type === 'image') {
-                    // 获取光标位置
-                    const textarea = editorRef.current;
-                    if (textarea) {
-                        const start = textarea.selectionStart;
-                        const end = textarea.selectionEnd;
-                        const imageText = `![${file.name.split('.')[0]}](${file.name})`;
-                        
-                        const before = content.substring(0, start);
-                        const after = content.substring(end);
-                        const newContent = before + imageText + after;
-                        
-                        setContent(newContent);
-                        setTimeout(() => {
-                            textarea.selectionStart = textarea.selectionEnd = start + imageText.length;
-                            textarea.focus();
-                        }, 0);
-                    }
-                }
-            } catch (error) {
-                console.error('Error parsing dragged file data:', error);
-            }
-            return;
+  // 获取拖拽的文件信息
+  const fileData = e.dataTransfer.getData('application/json');
+  if (fileData) {
+    try {
+      const file = JSON.parse(fileData) as WorkspaceFile;
+      if (file.type === 'image') {
+        const textarea = editorRef.current;
+        if (textarea) {
+          const start = textarea.selectionStart;
+          const end = textarea.selectionEnd;
+          // 使用不带扩展名的文件名作为 alt
+          const baseName = file.name.split('.')[0];
+          const imageText = `![${baseName}](${file.name})`;
+          
+          const newContent = content.substring(0, start) + imageText + content.substring(end);
+          setContent(newContent);
+          
+          // 更新历史和标签页
+          addHistory(newContent, start + imageText.length);
+          setTabs(prev => prev.map(tab => 
+            tab.id === activeTab ? { ...tab, content: newContent } : tab
+          ));
+          
+          setTimeout(() => {
+            textarea.selectionStart = textarea.selectionEnd = start + imageText.length;
+            textarea.focus();
+          }, 0);
         }
+      }
+    } catch (error) {
+      console.error('Error parsing dragged file data:', error);
+    }
+    return;
+  }
 
-        // 处理外部文件拖拽
-        const droppedFiles = e.dataTransfer.files;
-        if (droppedFiles.length > 0) {
-            handleFiles(droppedFiles);
-        }
-    };
-    
+  // 处理外部文件拖拽
+  const droppedFiles = e.dataTransfer.files;
+  if (droppedFiles.length > 0) {
+    handleFiles(droppedFiles);
+  }
+};
+
      // 处理右键菜单
     const handleContextMenu = (e: React.MouseEvent, file: WorkspaceFile) => {
         e.preventDefault();
@@ -450,6 +672,8 @@ title:
            switchTab(fileName);
         }
     };
+
+    
     
      // 更新当前文件内容
      useEffect(() => {
@@ -461,53 +685,59 @@ title:
         checkMissingResources(content);
     }, [content, currentFile]);
 
-   // 处理文件上传
-    const handleFiles = async (uploadedFiles: FileList): Promise<void> => {
-      for (const file of Array.from(uploadedFiles)) {
-          if (file.name.endsWith('.md')) {
-              await handleMarkdownImport(file);
-              continue;
-          }
-    
-          const reader = new FileReader();
-          
-          reader.onload = async (e: ProgressEvent<FileReader>) => {
-              const fileContent = e.target?.result;
-              if (!fileContent) return;
-              
-              const fileType = file.type.startsWith('image/') ? 'image' : 'other';
-              
-              // 添加文件到工作区
-              setFiles(prev => [...prev, {
-                  name: file.name,
-                  type: fileType,
-                  content: fileContent
-              }]);
-      
-              // 更新缺失资源列表
-              setMissingResources(prev => 
-                  prev.filter(resource => resource.name !== file.name)
-              );
-      
-              // 如果是图片且当前没有photos记录，则添加
-              if (fileType === 'image' && !content.includes('photos:\n-')) {
-                  const lines = content.split('\n');
-                  const photosIndex = lines.findIndex(line => line.trim() === 'photos:');
-                  if (photosIndex !== -1) {
-                  lines[photosIndex + 1] = `- ${file.name}`;
-                  setContent(lines.join('\n'));
-                  }
-              }
-          };
-          
-          if (file.type.startsWith('image/')) {
-              reader.readAsArrayBuffer(file);
-          } else {
-              reader.readAsText(file);
-          }
-      }
-    };
-
+// 修改文件处理函数
+const handleFiles = async (uploadedFiles: FileList): Promise<void> => {
+  const imageFiles = Array.from(uploadedFiles).filter(isImageFile);
+  const nonImageFiles = Array.from(uploadedFiles).filter(file => !isImageFile(file));
+  
+  // 检查是否有非 WebP 的图片文件
+  const nonWebPImages = imageFiles.filter(file => !isWebPFile(file));
+  
+  if (nonWebPImages.length > 0) {
+    setImageConversionDialog({
+      isOpen: true,
+      file: nonWebPImages[0],
+      pendingFiles: nonWebPImages,
+    });
+  }
+  
+  // 处理 WebP 图片文件
+  const webPImages = imageFiles.filter(isWebPFile);
+  for (const file of webPImages) {
+    try {
+      const processedFile = await processImageFile(file, false);
+      setFiles(prev => [...prev, processedFile]);
+    } catch (error) {
+      console.error('Error processing WebP file:', error);
+    }
+  }
+  
+  // 处理非图片文件
+  for (const file of nonImageFiles) {
+    if (file.name.endsWith('.md')) {
+      await handleMarkdownImport(file);
+    } else {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const content = e.target?.result;
+        if (!content) return;
+        
+        setFiles(prev => [...prev, {
+          name: file.name,
+          type: 'other',
+          content,
+        }]);
+      };
+      reader.readAsText(file);
+    }
+  }
+};
+  // Add this to the history management section
+  const addToHistory = (newContent: string) => {
+    if (editorRef.current) {
+      addHistory(newContent, editorRef.current.selectionStart);
+    }
+  };
   // 在光标位置插入文本
     const insertText = (before: string, after: string = '') => {
         const textarea = editorRef.current;
@@ -577,17 +807,27 @@ title:
         }
       };
     
-    // 关闭标签页
-     const closeTab = (tabId: string) => {
-        setTabs(prevTabs => prevTabs.filter(tab => tab.id !== tabId));
-        if (activeTab === tabId) {
-            setActiveTab(prevTabs => prevTabs.filter(tab => tab.id !== tabId)[0]?.id || '');
-            setContent(prevTabs => prevTabs.filter(tab => tab.id !== tabId)[0]?.content || '');
-            
-            const firstFile = files.find(file=>file.name===prevTabs.filter(tab => tab.id !== tabId)[0]?.fileName);
-            setCurrentFile(firstFile?.name || '')
-        }
-      };
+    // 修改 closeTab 函数
+const closeTab = (tabId: string) => {
+  const remainingTabs = tabs.filter(tab => tab.id !== tabId);
+  setTabs(remainingTabs);
+  
+  if (activeTab === tabId) {
+    if (remainingTabs.length > 0) {
+      // 如果还有其他标签页，切换到第一个
+      const firstTab = remainingTabs[0];
+      setActiveTab(firstTab.id);
+      setContent(firstTab.content);
+      setCurrentFile(firstTab.fileName);
+    } else {
+      // 如果没有剩余标签页，清空所有状态
+      setActiveTab('');
+      setContent('');
+      setCurrentFile('');
+    }
+  }
+};
+
     
     // 处理文件输入改变
     const handleFileInputChange = (e: FileInputEvent): void => {
@@ -871,7 +1111,16 @@ title:
                   key={file.name}
                   draggable={file.type === 'image'}
                   onDragStart={(e) => handleFileDrag(e, file)}
-                  onContextMenu={(e) => handleContextMenu(e, file)}
+                  // 在文件列表项中更新右键菜单处理
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setContextMenu({
+                      show: true,
+                      x: e.clientX,
+                      y: e.clientY,
+                      file: file
+                    });
+                  }}
                   onClick={() => file.type === 'markdown' && handleFileSelect(file.name)}
                   className={`flex items-center gap-2 p-2 rounded cursor-pointer ${
                     currentFile === file.name 
@@ -959,40 +1208,17 @@ title:
         </div>
       </div>
 
-{/* 右键菜单 */}
-{contextMenu.show && contextMenu.file && (
-  <div 
-    className="fixed bg-white shadow-lg rounded-lg py-1 text-sm"
-    style={{ top: contextMenu.y, left: contextMenu.x }}
-  >
-    <button
-      onClick={() => {
-        setCoverImage(contextMenu.file!.name);
-        setContextMenu(prev => ({ ...prev, show: false }));
-      }}
-      className="w-full px-4 py-2 text-left hover:bg-gray-100"
-    >
-      设为封面图
-    </button>
-  </div>
-)}
-
-      {/* 右键菜单 */}
+      {/* 文件右键菜单 */}
       {contextMenu.show && contextMenu.file && (
-        <div 
-          className="fixed bg-white shadow-lg rounded-lg py-1 text-sm"
-          style={{ top: contextMenu.y, left: contextMenu.x }}
-        >
-          <button
-           onClick={(e) => {handleClickAnimation(e);
-              setCoverImage(contextMenu.file!.name);
-              setContextMenu(prev => ({ ...prev, show: false }));
-            }}
-            className="w-full px-4 py-2 text-left hover:bg-gray-100"
-          >
-            设为封面图
-          </button>
-        </div>
+        <FileContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          file={contextMenu.file}
+          onClose={() => setContextMenu(prev => ({ ...prev, show: false }))}
+          onDelete={handleDeleteFile}
+          onRename={handleRenameFile}
+          onSetCover={contextMenu.file.type === 'image' ? setCoverImage : undefined}
+        />
       )}
 
       {/* 隐藏的文件输入 */}
@@ -1014,7 +1240,22 @@ title:
         className="hidden"
         multiple
       />
+        {/* 添加图片转换对话框 */}
+        <ImageConversionDialog
+        isOpen={imageConversionDialog.isOpen}
+        onClose={handleImageConversionCancel}
+        onConfirm={handleImageConversionConfirm}
+        imageInfo={
+          imageConversionDialog.file
+            ? {
+                name: imageConversionDialog.file.name,
+                size: imageConversionDialog.file.size,
+              }
+            : null
+        }
+      />
     </div>
+      
   );
 };
 
