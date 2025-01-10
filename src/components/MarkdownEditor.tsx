@@ -7,6 +7,8 @@ import {
 import JSZip from 'jszip';
 import MarkdownPreview from './MarkdownPreview';
 import anime from 'animejs';
+import { HistoryManager, useHistoryManager, HistoryState } from './HistoryManager';
+
 
 // 扩展类型定义
 interface WorkspaceFile {
@@ -28,12 +30,16 @@ interface ContextMenuState {
   file?: WorkspaceFile;
 }
 
+// 首先修改 Tab 接口定义
 interface Tab {
-    id: string;
-    fileName: string;
-    content: string;
-    history: EditHistory[];
-    currentHistoryIndex: number;
+  id: string;
+  fileName: string;
+  content: string;
+}
+// 扩展 Tab 接口
+interface TabWithHistory extends Tab {
+  history: HistoryState[];
+  currentHistoryIndex: number;
 }
   
 interface EditHistory {
@@ -67,13 +73,21 @@ const MarkdownEditor: React.FC = () => {
     
     const [tabs, setTabs] = useState<Tab[]>([]); // 标签页列表
     const [activeTab, setActiveTab] = useState<string>(''); // 当前激活的标签页
-    const [editHistory, setEditHistory] = useState<EditHistory[]>([]); // 编辑历史记录
-    const [currentHistoryIndex, setCurrentHistoryIndex] = useState<number>(-1); // 当前历史记录索引
-    
+
     // Ref 引用
     const editorRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const resourceInputRef = useRef<HTMLInputElement>(null);
+    
+    // 初始化历史管理器
+    const {
+      content: historyContent,
+      addHistory,
+      undo: historyUndo,
+      redo: historyRedo,
+      canUndo,
+      canRedo,
+    } = useHistoryManager('');
 
 
     // 生成默认模板
@@ -121,106 +135,157 @@ title:
 
     // 处理粘贴事件
     const handlePaste = (e: PasteEvent): void => {
-        const pastedText = e.clipboardData.getData('text');
-        if (!pastedText.trim()) return;
-    
-        const linkInfo = formatLinkContent(pastedText);
-        if (linkInfo) {
-            e.preventDefault();
-            
-            if (window.confirm('检测到链接，是否要转换为Markdown链接格式？')) {
-                let linkText;
-                const { url, extractionCode, title } = linkInfo;
-                
-                // 根据不同情况生成不同的链接格式
-                if (title && extractionCode) {
-                    linkText = `[${title} | 提取码：${extractionCode}](${url})`;
-                } else if (title) {
-                    linkText = `[${title}](${url})`;
-                } else if (extractionCode) {
-                    linkText = `[链接 | 提取码：${extractionCode}](${url})`;
-                } else {
-                    linkText = `[链接](${url})`;
-                }
-                
-                const textarea = editorRef.current;
-                if (textarea) {
-                    const start = textarea.selectionStart;
-                    const end = textarea.selectionEnd;
-                    const newContent = content.substring(0, start) + linkText + content.substring(end);
-                    setContent(newContent);
-                    
-                    // 添加到历史记录
-                    addToHistory(newContent);
-                    
-                    // 设置光标位置到链接后
-                    setTimeout(() => {
-                        textarea.focus();
-                        const newPosition = start + linkText.length;
-                        textarea.setSelectionRange(newPosition, newPosition);
-                    }, 0);
-                }
-            }
-        }
+      const pastedText = e.clipboardData.getData('text');
+      if (!pastedText.trim()) return;
+  
+      const linkInfo = formatLinkContent(pastedText);
+      if (linkInfo) {
+          e.preventDefault();
+          
+          if (window.confirm('检测到链接，是否要转换为Markdown链接格式？')) {
+              let linkText;
+              const { url, extractionCode, title } = linkInfo;
+              
+              // 根据不同情况生成不同的链接格式
+              if (title && extractionCode) {
+                  linkText = `[${title} | 提取码：${extractionCode}](${url})`;
+              } else if (title) {
+                  linkText = `[${title}](${url})`;
+              } else if (extractionCode) {
+                  linkText = `[链接 | 提取码：${extractionCode}](${url})`;
+              } else {
+                  linkText = `[链接](${url})`;
+              }
+              
+              const textarea = editorRef.current;
+              if (textarea) {
+                  const start = textarea.selectionStart;
+                  const end = textarea.selectionEnd;
+                  const newContent = content.substring(0, start) + linkText + content.substring(end);
+                  
+                  // 更新内容
+                  setContent(newContent);
+                  
+                  // 添加到历史记录，使用新的 addHistory 函数
+                  addHistory(newContent, start + linkText.length);
+                  
+                  // 更新标签页内容
+                  setTabs(prev => prev.map(tab => 
+                      tab.id === activeTab
+                          ? { ...tab, content: newContent }
+                          : tab
+                  ));
+                  
+                  // 设置光标位置到链接后
+                  setTimeout(() => {
+                      textarea.focus();
+                      const newPosition = start + linkText.length;
+                      textarea.setSelectionRange(newPosition, newPosition);
+                  }, 0);
+              }
+          }
+      }
+  };
+
+    // 处理内容变化
+    const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      const newContent = e.target.value;
+      setContent(newContent);
+      addHistory(newContent, e.target.selectionStart);
+      
+      // 更新当前标签页
+      setTabs(prev => prev.map(tab => 
+        tab.id === activeTab
+          ? { ...tab, content: newContent }
+          : tab
+      ));
+    };
+    // 处理撤销
+    const handleUndo = () => {
+      const previousState = historyUndo();
+      if (previousState) {
+        setContent(previousState.content);
+        // 更新当前标签页
+        setTabs(prev => prev.map(tab => 
+          tab.id === activeTab
+            ? { ...tab, content: previousState.content }
+            : tab
+        ));
+      }
+    };
+    // 处理重做
+    const handleRedo = () => {
+      const nextState = historyRedo();
+      if (nextState) {
+        setContent(nextState.content);
+        // 更新当前标签页
+        setTabs(prev => prev.map(tab => 
+          tab.id === activeTab
+            ? { ...tab, content: nextState.content }
+            : tab
+        ));
+      }
     };
 
-
      // 新建文件
-     const createNewFile = () => {
+     // 处理新建文件
+    const createNewFile = () => {
       const fileName = 'index.md';
+      const defaultContent = generateDefaultTemplate();
       
       // 检查是否已存在 index.md
       if (files.some(f => f.name === fileName)) {
-          let counter = 1;
-          let newFileName = `index-${counter}.md`;
-          while (files.some(f => f.name === newFileName)) {
-              newFileName = `index-${++counter}.md`;
-          }
-          
-          const newFile: WorkspaceFile = {
-              name: newFileName,
-              type: 'markdown',
-              content: generateDefaultTemplate(),
-              isNew: true
-          };
-          setFiles(prev => [...prev, newFile]);
-          setCurrentFile(newFileName);
-          setContent(newFile.content as string);
-          
-          const newTab: Tab = {
-              id: newFileName,
-              fileName: newFileName,
-              content: newFile.content as string,
-              history: [{ content: newFile.content as string, cursorPosition: 0 }],
-              currentHistoryIndex: 0
-          };
-          setTabs(prev => [...prev, newTab]);
-          setActiveTab(newTab.id);
+        let counter = 1;
+        let newFileName = `index-${counter}.md`;
+        while (files.some(f => f.name === newFileName)) {
+          newFileName = `index-${++counter}.md`;
+        }
+        
+        const newFile: WorkspaceFile = {
+          name: newFileName,
+          type: 'markdown',
+          content: defaultContent,
+          isNew: true
+        };
+
+        setFiles(prev => [...prev, newFile]);
+        setCurrentFile(newFileName);
+        setContent(defaultContent);
+        
+        const newTab: Tab = {
+          id: newFileName,
+          fileName: newFileName,
+          content: defaultContent
+        };
+        
+        setTabs(prev => [...prev, newTab]);
+        setActiveTab(newTab.id);
+        addHistory(defaultContent, 0);
       } else {
-          const newFile: WorkspaceFile = {
-              name: fileName,
-              type: 'markdown',
-              content: generateDefaultTemplate(),
-              isNew: true
-          };
-  
-          setFiles(prev => [...prev, newFile]);
-          setCurrentFile(fileName);
-          setContent(newFile.content as string);
-              
-          const newTab: Tab = {
-              id: fileName,
-              fileName: fileName,
-              content: newFile.content as string,
-              history: [{ content: newFile.content as string, cursorPosition: 0 }],
-              currentHistoryIndex: 0
-          };
-          setTabs(prev => [...prev, newTab]);
-          setActiveTab(newTab.id);
+        const newFile: WorkspaceFile = {
+          name: fileName,
+          type: 'markdown',
+          content: defaultContent,
+          isNew: true
+        };
+
+        setFiles(prev => [...prev, newFile]);
+        setCurrentFile(fileName);
+        setContent(defaultContent);
+            
+        const newTab: Tab = {
+          id: fileName,
+          fileName: fileName,
+          content: defaultContent
+        };
+        
+        setTabs(prev => [...prev, newTab]);
+        setActiveTab(newTab.id);
+        addHistory(defaultContent, 0);
       }
       
       setMissingResources([]);
-  };
+    };
 
     // 设置封面图
     const setCoverImage = (imageName: string) => {
@@ -481,31 +546,7 @@ title:
         code: () => insertText('`', '`'),
     };
     
-    // 历史记录相关函数
-      const addToHistory = (newContent: string) => {
-        const newHistory = [...editHistory.slice(0, currentHistoryIndex + 1), {
-            content: newContent,
-            cursorPosition: editorRef.current?.selectionStart || 0
-          }];
-          setEditHistory(newHistory);
-          setCurrentHistoryIndex(newHistory.length - 1);
-      };
     
-    const undo = () => {
-          if (currentHistoryIndex <= 0) return;
-          const newIndex = currentHistoryIndex - 1;
-          const historyItem = editHistory[newIndex];
-          setContent(historyItem.content);
-          setCurrentHistoryIndex(newIndex);
-    };
-    
-    const redo = () => {
-          if (currentHistoryIndex >= editHistory.length - 1) return;
-          const newIndex = currentHistoryIndex + 1;
-          const historyItem = editHistory[newIndex];
-          setContent(historyItem.content);
-          setCurrentHistoryIndex(newIndex);
-    };
     
     // 下载工作文件夹
     const downloadWorkspace = async (): Promise<void> => {
@@ -524,15 +565,15 @@ title:
         URL.revokeObjectURL(url);
     };
         
-      // 切换标签页
+      // 修改后的切换标签页函数
       const switchTab = (tabId: string) => {
         const tab = tabs.find(t => t.id === tabId);
         if (tab) {
           setActiveTab(tabId);
           setContent(tab.content);
-          setEditHistory(tab.history);
-          setCurrentHistoryIndex(tab.currentHistoryIndex);
-          setCurrentFile(tab.fileName)
+          // 为新标签页初始化历史记录
+          addHistory(tab.content, 0);
+          setCurrentFile(tab.fileName);
         }
       };
     
@@ -555,21 +596,22 @@ title:
         }
     };
     
-    useEffect(() => {
+      // 修改键盘快捷键处理
+      useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
           if (e.ctrlKey || e.metaKey) {
             switch (e.key.toLowerCase()) {
               case 'z':
                 e.preventDefault();
                 if (e.shiftKey) {
-                  redo();
+                  handleRedo();
                 } else {
-                  undo();
+                  handleUndo();
                 }
                 break;
               case 'y':
                 e.preventDefault();
-                redo();
+                handleRedo();
                 break;
               case 'b':
                 e.preventDefault();
@@ -584,20 +626,21 @@ title:
         };
     
         document.addEventListener('keydown', handleKeyDown);
-        return () => document.removeEventListener('keydown', handleKeyDown);
-    }, [content]);
+      return () => document.removeEventListener('keydown', handleKeyDown);
+    }, [handleUndo, handleRedo]);
     
-    useEffect(()=>{
-        if(activeTab){
-          const activeTabObj = tabs.find(tab=>tab.id === activeTab)
-          if(activeTabObj){
-              setContent(activeTabObj.content)
-              setEditHistory(activeTabObj.history)
-              setCurrentHistoryIndex(activeTabObj.currentHistoryIndex)
-              setCurrentFile(activeTabObj.fileName)
-          }
+    // 修改后的 useEffect
+    useEffect(() => {
+      if (activeTab) {
+        const activeTabObj = tabs.find(tab => tab.id === activeTab);
+        if (activeTabObj) {
+          setContent(activeTabObj.content);
+          // 为活动标签页初始化历史记录
+          addHistory(activeTabObj.content, 0);
+          setCurrentFile(activeTabObj.fileName);
         }
-      },[activeTab, tabs])
+      }
+    }, [activeTab, tabs]);
 
       // 添加点击动画函数
       const handleClickAnimation = (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -665,22 +708,43 @@ title:
   
          {/* 编辑工具栏 */}
         <div className="flex items-center gap-2 border-t pt-2 justify-center">
+          {/* ... 其他工具栏内容 ... */}
+          <HistoryManager
+            content={content}
+            onContentChange={(newContent) => {
+              setContent(newContent);
+              setTabs(prev => prev.map(tab => 
+                tab.id === activeTab
+                  ? { ...tab, content: newContent }
+                  : tab
+              ));
+            }}
+            className="border-r pr-2"
+            disabled={!currentFile}
+          />
           <div className="flex gap-1 border-r pr-2">
-              <button 
-                onClick={(e)=>{handleClickAnimation(e); undo()}}
-                className="p-1.5 rounded hover:bg-gray-100"
-                title="撤销 (Ctrl+Z)"
-              >
-                  <Undo size={16} />
-              </button>
-              <button 
-                onClick={(e)=>{handleClickAnimation(e); redo()}}
-                  className="p-1.5 rounded hover:bg-gray-100"
-                title="重做 (Ctrl+Y)"
-              >
+            <button 
+              onClick={(e)=>{handleClickAnimation(e); handleUndo()}}
+              className={`p-1.5 rounded ${
+                canUndo ? 'hover:bg-gray-100 text-gray-700' : 'text-gray-300 cursor-not-allowed'
+              }`}
+              disabled={!canUndo}
+              title="撤销 (Ctrl+Z)"
+            >
+              <Undo size={16} />
+            </button>
+            <button 
+              onClick={(e)=>{handleClickAnimation(e); handleRedo()}}
+              className={`p-1.5 rounded ${
+                canRedo ? 'hover:bg-gray-100 text-gray-700' : 'text-gray-300 cursor-not-allowed'
+              }`}
+              disabled={!canRedo}
+              title="重做 (Ctrl+Y)"
+            >
                   <Redo size={16} />
               </button>
           </div>
+          
               
           <div className="flex gap-1 border-r pr-2">
                 <button 
@@ -793,8 +857,9 @@ title:
       </div>
       </div>
 
-      <div className="flex-1 flex min-h-0">
-        {/* 文件列表 */}
+      {/* 编辑器和预览区域的整体容器 */}
+      <div className="flex-1 flex">
+        {/* 左侧文件列表 */}
         <div className="w-64 overflow-y-auto bg-white border-r">
           <div className="p-4">
             <h2 className="font-semibold mb-4 flex items-center gap-2 text-gray-700">
@@ -843,7 +908,7 @@ title:
                   ))}
                 </ul>
                 <button
-                 onClick={(e) => {handleClickAnimation(e); resourceInputRef.current?.click()}}
+                  onClick={(e) => {handleClickAnimation(e); resourceInputRef.current?.click()}}
                   className="mt-2 w-full px-3 py-1 bg-yellow-100 text-yellow-800 rounded text-sm hover:bg-yellow-200"
                 >
                   导入缺失文件
@@ -853,45 +918,65 @@ title:
           </div>
         </div>
 
-       {/* 编辑器和预览 */}
-        <div className="flex-1 flex min-h-0">
-           {/* 编辑器 */}
-          <div className="flex-1 p-4 min-h-0">
-            <div 
-              className={`h-full relative border-2 rounded-lg bg-white ${
-                isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300'
-              }`}
-            >
-              <textarea
-                ref={editorRef}
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-                onDragOver={(e) => {
+        {/* 右侧编辑器和预览区域 */}
+        <div className="flex-1 flex">
+          {/* 编辑器区域 */}
+          <div className="flex-1 flex flex-col">
+            <div className="flex-1 p-4">
+              <div 
+                className={`h-full relative border-2 rounded-lg bg-white ${
+                  isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300'
+                }`}
+              >
+                <textarea
+                  ref={editorRef}
+                  value={content}
+                  onChange={handleContentChange}
+                  onDragOver={(e) => {
                     e.preventDefault();
                     setIsDragging(true);
-                }}
-                onDragLeave={() => setIsDragging(false)}
-                onDrop={handleEditorDrop}
-                onPaste={handlePaste}
-                className="w-full h-full p-4 font-mono resize-none focus:outline-none"
-                placeholder="开始编辑..."
-              />
-               {isProcessing && (
-                    <div className="absolute inset-0 bg-white bg-opacity-50 flex items-center justify-center">
-                        <Loader2 className="animate-spin" />
-                    </div>
+                  }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={handleEditorDrop}
+                  onPaste={handlePaste}
+                  className="w-full h-full resize-none focus:outline-none p-4 font-mono"
+                  placeholder="开始编辑..."
+                />
+                {isProcessing && (
+                  <div className="absolute inset-0 bg-white bg-opacity-50 flex items-center justify-center">
+                    <Loader2 className="animate-spin" />
+                  </div>
                 )}
+              </div>
             </div>
           </div>
 
-           {/* 预览 */}
-          <div className="flex-1 p-4 min-h-0">
+          {/* 预览区域 */}
+          <div className="flex-1 p-4">
             <div className="h-full overflow-auto border rounded-lg p-4 bg-white">
               <MarkdownPreview content={content} files={files} />
             </div>
           </div>
         </div>
       </div>
+
+{/* 右键菜单 */}
+{contextMenu.show && contextMenu.file && (
+  <div 
+    className="fixed bg-white shadow-lg rounded-lg py-1 text-sm"
+    style={{ top: contextMenu.y, left: contextMenu.x }}
+  >
+    <button
+      onClick={() => {
+        setCoverImage(contextMenu.file!.name);
+        setContextMenu(prev => ({ ...prev, show: false }));
+      }}
+      className="w-full px-4 py-2 text-left hover:bg-gray-100"
+    >
+      设为封面图
+    </button>
+  </div>
+)}
 
       {/* 右键菜单 */}
       {contextMenu.show && contextMenu.file && (
