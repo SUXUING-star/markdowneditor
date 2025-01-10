@@ -77,7 +77,7 @@ const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({ content, files }) => 
         
         {/* 渲染主要内容 */}
         <ReactMarkdown
-          className="prose max-w-none"
+          className="prose prose-sm w-full max-w-none"
           rehypePlugins={[rehypeRaw, rehypeSanitize]}
           components={{
             img: ({ src, alt }) => {

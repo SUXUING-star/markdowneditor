@@ -676,8 +676,7 @@ title:
 
 
   return (
-    <div className="w-full h-screen flex flex-col overflow-hidden bg-gray-50">
-        {/* 顶部工具栏 */}
+    <div className="h-screen flex flex-col">        {/* 顶部工具栏 */}
       <div className="p-4 border-b flex flex-col gap-2 bg-white shadow-sm toolbar-container" style={{display:'flex', alignItems:'center'}}>
           {/* 主要操作按钮 */}
           <div className="flex justify-center items-center w-full">
@@ -951,9 +950,9 @@ title:
             </div>
           </div>
 
-          {/* 预览区域 */}
-          <div className="flex-1 p-4">
-            <div className="h-full overflow-auto border rounded-lg p-4 bg-white">
+          {/* 预览区域 - 独立滚动 */}
+          <div className="flex-1 p-4 overflow-y-auto">
+            <div className="min-h-full rounded-lg p-4 bg-white border">
               <MarkdownPreview content={content} files={files} />
             </div>
           </div>
