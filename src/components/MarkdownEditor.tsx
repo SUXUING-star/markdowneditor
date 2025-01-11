@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   Loader2, Download, Upload, FolderOpen, File, AlertCircle, Plus, Image as ImageIcon,
   Bold, Italic, Strikethrough, Heading1, Heading2, Heading3,
-  Undo, Redo, List, ListOrdered, Link, Code, X
+  Undo, Redo, List, ListOrdered, Link, Code, X, Scissors // 添加 Scissors 图标
 } from 'lucide-react';
 import JSZip from 'jszip';
 import MarkdownPreview from './MarkdownPreview';
@@ -11,15 +11,18 @@ import { HistoryManager, useHistoryManager, HistoryState } from './HistoryManage
 // 在 MarkdownEditor.tsx 顶部，修改导入语句
 import { convertToWebP, isImageFile, isWebPFile, generateWebPFileName } from "../utils/imageconvert";
 import ImageConversionDialog from './ImageConversionDialog';
-import FileContextMenu from './FileContextMenu';
+import CustomContextMenu from './CustomContextMenu.tsx';
+import FrontMatterEditor from './FrontMatterEditor';
+import FilePreview from './FilePreview.tsx';
 
-// 扩展类型定义
+// Interface definitions...
 interface WorkspaceFile {
   name: string;
   type: 'markdown' | 'image' | 'other';
   content: string | ArrayBuffer;
   isNew?: boolean;
 }
+
 
 interface MissingResource {
   name: string;
@@ -65,49 +68,46 @@ interface PasteEvent extends React.ClipboardEvent<HTMLTextAreaElement> {
 }
 
 const MarkdownEditor: React.FC = () => {
-    // 状态管理
-    const [content, setContent] = useState<string>(''); // 当前编辑器内容
-    const [files, setFiles] = useState<WorkspaceFile[]>([]); // 工作区文件列表
-    const [currentFile, setCurrentFile] = useState<string>(''); // 当前选中的文件
-    const [isDragging, setIsDragging] = useState<boolean>(false); // 是否正在拖拽
-    const [isProcessing, setIsProcessing] = useState<boolean>(false); // 是否正在处理中
-    const [missingResources, setMissingResources] = useState<MissingResource[]>([]); // 缺失的资源列表
-    // 替换原有的 contextMenu 状态
-    const [contextMenu, setContextMenu] = useState<{
-      show: boolean;
-      x: number;
-      y: number;
-      file?: WorkspaceFile;
-    }>({ show: false, x: 0, y: 0 });
-    const [tabs, setTabs] = useState<Tab[]>([]); // 标签页列表
-    const [activeTab, setActiveTab] = useState<string>(''); // 当前激活的标签页
+  // 状态定义
+  const [content, setContent] = useState<string>('');
+  const [files, setFiles] = useState<WorkspaceFile[]>([]);
+  const [currentFile, setCurrentFile] = useState<string>('');
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [previewFile, setPreviewFile] = useState<WorkspaceFile | null>(null);
+  const [tabs, setTabs] = useState<Tab[]>([]);
+  const [activeTab, setActiveTab] = useState<string>('');
+  const [missingResources, setMissingResources] = useState<MissingResource[]>([]); // 添加缺失资源状态
+  const [contextMenu, setContextMenu] = useState<{
+    show: boolean;
+    x: number;
+    y: number;
+    file?: WorkspaceFile;
+  }>({ show: false, x: 0, y: 0 });
+  const [imageConversionDialog, setImageConversionDialog] = useState<{
+    isOpen: boolean;
+    file: File | null;
+    pendingFiles: File[];
+  }>({
+    isOpen: false,
+    file: null,
+    pendingFiles: [],
+  });
 
-    // Ref 引用
-    const editorRef = useRef<HTMLTextAreaElement>(null);
-    const fileInputRef = useRef<HTMLInputElement>(null);
-    const resourceInputRef = useRef<HTMLInputElement>(null);
+  // Refs
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const resourceInputRef = useRef<HTMLInputElement>(null);
 
-    const [imageConversionDialog, setImageConversionDialog] = useState<{
-      isOpen: boolean;
-      file: File | null;
-      pendingFiles: File[];
-    }>({
-      isOpen: false,
-      file: null,
-      pendingFiles: [],
-    });
-  
-    
-    // 初始化历史管理器
-    const {
-      content: historyContent,
-      addHistory,
-      undo: historyUndo,
-      redo: historyRedo,
-      canUndo,
-      canRedo,
-    } = useHistoryManager('');
-
+  // 历史记录管理
+  const {
+    content: historyContent,
+    addHistory,
+    undo: historyUndo,
+    redo: historyRedo,
+    canUndo,
+    canRedo,
+  } = useHistoryManager('');
 
     // Example of proper indentation
 const generateDefaultTemplate = () => {
@@ -123,96 +123,94 @@ tags:
 - 
 title: 
 ---
+# 说明&介绍
+
+<!--more-->
+
+# 下载链接
 
 `;
 };
 
-      /// 修改处理图片文件的函数
-
-      const processImageFile = async (file: File, shouldConvertToWebP: boolean = false): Promise<WorkspaceFile> => {
-        if (shouldConvertToWebP && !isWebPFile(file)) {
-          try {
-            const { webpBlob, quality } = await convertToWebP(file);
-            const webpFileName = generateWebPFileName(file.name);
-            
-            // 使用 Blob 而不是 File
-            const buffer = await webpBlob.arrayBuffer();
-            return {
-              name: webpFileName,
-              type: 'image',
-              content: buffer
-            };
-          } catch (error) {
-            console.error('Failed to convert image:', error);
-            // 如果转换失败，回退到原始文件
-            const buffer = await file.arrayBuffer();
-            return {
-              name: file.name,
-              type: 'image',
-              content: buffer
-            };
-          }
-        } else {
-          const buffer = await file.arrayBuffer();
-          return {
-            name: file.name,
-            type: 'image',
-            content: buffer
-          };
-        }
-      };
-  
-// 修改 handleDeleteFile 函数
-const handleDeleteFile = (fileName: string) => {
-  // 如果是当前打开的文件，先关闭标签页
-  if (currentFile === fileName) {
-    closeTab(fileName);
-  }
-  
-  // 更新文件列表
-  setFiles(prev => prev.filter(f => f.name !== fileName));
-  
-  // 如果是图片文件，检查并更新所有markdown文件中的引用
-  const deletedFile = files.find(f => f.name === fileName);
-  if (deletedFile?.type === 'image') {
-    setFiles(prev => prev.map(file => {
-      if (file.type === 'markdown') {
-        const content = String(file.content);
-        // 更新图片引用
-        const updatedContent = content.replace(
-          new RegExp(`!\\[.*?\\]\\(${fileName}\\)`, 'g'),
-          '![图片已删除]()'
-        );
-        // 更新封面图引用
-        const lines = updatedContent.split('\n');
-        const photosIndex = lines.findIndex(line => line.trim() === 'photos:');
-        if (photosIndex !== -1 && lines[photosIndex + 1].includes(fileName)) {
-          lines[photosIndex + 1] = '- ';
-        }
+      // 图片和文件处理函数
+  const processImageFile = async (file: File, shouldConvertToWebP: boolean = false): Promise<WorkspaceFile> => {
+    if (shouldConvertToWebP && !isWebPFile(file)) {
+      try {
+        const { webpBlob } = await convertToWebP(file);
+        const webpFileName = generateWebPFileName(file.name);
+        const arrayBuffer = await webpBlob.arrayBuffer();
+        
         return {
-          ...file,
-          content: lines.join('\n')
+          name: webpFileName,
+          type: 'image',
+          content: arrayBuffer
+        };
+      } catch (error) {
+        console.error('Failed to convert image:', error);
+        const buffer = await file.arrayBuffer();
+        return {
+          name: file.name,
+          type: 'image',
+          content: buffer
         };
       }
-      return file;
-    }));
+    } else {
+      const buffer = await file.arrayBuffer();
+      return {
+        name: file.name,
+        type: 'image',
+        content: buffer
+      };
+    }
+  };
+// 文件删除处理
+const handleDeleteFile = (fileName: string) => {
+  if (window.confirm('确定要删除此文件吗？')) {
+    // 如果是当前打开的文件，先关闭标签页
+    if (currentFile === fileName) {
+      closeTab(fileName);
+    }
     
-    // 如果当前打开的文件是markdown，更新编辑器内容
-    if (currentFile && files.find(f => f.name === currentFile)?.type === 'markdown') {
-      const currentContent = content;
-      const updatedContent = currentContent.replace(
-        new RegExp(`!\\[.*?\\]\\(${fileName}\\)`, 'g'),
-        '![图片已删除]()'
-      );
-      setContent(updatedContent);
+    // 更新文件列表
+    setFiles(prev => prev.filter(f => f.name !== fileName));
+    
+    // 如果是图片文件，更新引用
+    const deletedFile = files.find(f => f.name === fileName);
+    if (deletedFile?.type === 'image') {
+      setFiles(prev => prev.map(file => {
+        if (file.type === 'markdown') {
+          const content = String(file.content);
+          // 更新图片引用
+          const updatedContent = content.replace(
+            new RegExp(`!\\[.*?\\]\\(${fileName}\\)`, 'g'),
+            '![图片已删除]()'
+          );
+          // 更新封面图引用
+          const lines = updatedContent.split('\n');
+          const photosIndex = lines.findIndex(line => line.trim() === 'photos:');
+          if (photosIndex !== -1 && lines[photosIndex + 1].includes(fileName)) {
+            lines[photosIndex + 1] = '- ';
+          }
+          return {
+            ...file,
+            content: lines.join('\n')
+          };
+        }
+        return file;
+      }));
     }
   }
-  
-  // 如果删除的是最后一个文件，清理历史记录状态
-  if (files.length === 1) {
-    addHistory('', 0);
+};
+
+// 文件点击处理
+const handleFileClick = (file: WorkspaceFile) => {
+  if (file.type === 'image') {
+    setPreviewFile(file);
+  } else if (file.type === 'markdown') {
+    handleFileSelect(file.name);
   }
 };
+
 // 重命名文件
 const handleRenameFile = (oldName: string, newName: string) => {
   // 如果新文件名已存在，显示错误
@@ -685,14 +683,13 @@ const handleEditorDrop = async (e: React.DragEvent) => {
         checkMissingResources(content);
     }, [content, currentFile]);
 
-// 修改文件处理函数
+// 文件处理函数
 const handleFiles = async (uploadedFiles: FileList): Promise<void> => {
   const imageFiles = Array.from(uploadedFiles).filter(isImageFile);
   const nonImageFiles = Array.from(uploadedFiles).filter(file => !isImageFile(file));
   
-  // 检查是否有非 WebP 的图片文件
+  // 处理非 WebP 图片转换
   const nonWebPImages = imageFiles.filter(file => !isWebPFile(file));
-  
   if (nonWebPImages.length > 0) {
     setImageConversionDialog({
       isOpen: true,
@@ -701,37 +698,36 @@ const handleFiles = async (uploadedFiles: FileList): Promise<void> => {
     });
   }
   
-  // 处理 WebP 图片文件
+  // 处理已经是 WebP 的图片
   const webPImages = imageFiles.filter(isWebPFile);
   for (const file of webPImages) {
-    try {
-      const processedFile = await processImageFile(file, false);
-      setFiles(prev => [...prev, processedFile]);
-    } catch (error) {
-      console.error('Error processing WebP file:', error);
-    }
+    const processedFile = await processImageFile(file, false);
+    setFiles(prev => [...prev, processedFile]);
   }
   
   // 处理非图片文件
   for (const file of nonImageFiles) {
     if (file.name.endsWith('.md')) {
-      await handleMarkdownImport(file);
-    } else {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const content = e.target?.result;
-        if (!content) return;
-        
-        setFiles(prev => [...prev, {
-          name: file.name,
-          type: 'other',
-          content,
-        }]);
+      const content = await file.text();
+      setFiles(prev => [...prev, {
+        name: file.name,
+        type: 'markdown',
+        content
+      }]);
+      
+      // 创建新标签页
+      const newTab: Tab = {
+        id: file.name,
+        fileName: file.name,
+        content
       };
-      reader.readAsText(file);
+      setTabs(prev => [...prev, newTab]);
+      setActiveTab(newTab.id);
+      setContent(content);
     }
   }
 };
+
   // Add this to the history management section
   const addToHistory = (newContent: string) => {
     if (editorRef.current) {
@@ -762,20 +758,19 @@ const handleFiles = async (uploadedFiles: FileList): Promise<void> => {
         }, 0);
     };
       
-      // 格式化命令
-      const formatCommands = {
-        bold: () => insertText('**', '**'),
-        italic: () => insertText('*', '*'),
-        strikethrough: () => insertText('~~', '~~'),
-        h1: () => insertText('# '),
-        h2: () => insertText('## '),
-        h3: () => insertText('### '),
-        orderedList: () => insertText('1. '),
-        unorderedList: () => insertText('- '),
-        link: () => insertText('[', '](url)'),
-        code: () => insertText('`', '`'),
+    const formatCommands = {
+      bold: () => insertText('**', '**'),
+      italic: () => insertText('*', '*'),
+      strikethrough: () => insertText('~~', '~~'),
+      h1: () => insertText('# '),
+      h2: () => insertText('## '),
+      h3: () => insertText('### '),
+      orderedList: () => insertText('1. '),
+      unorderedList: () => insertText('- '),
+      link: () => insertText('[', '](url)'),
+      code: () => insertText('`', '`'),
+      more: () => insertText('\n<!--more-->\n')  // 添加摘要分隔符命令
     };
-    
     
     
     // 下载工作文件夹
@@ -861,6 +856,11 @@ const closeTab = (tabId: string) => {
                 e.preventDefault();
                 formatCommands.italic();
                 break;
+              case 'm': // 新增快捷键 Ctrl+M
+                e.preventDefault();
+                formatCommands.more();
+                break;
+
             }
           }
         };
@@ -1050,9 +1050,10 @@ const closeTab = (tabId: string) => {
                 </button>
             </div>
               
+            {/* 在工具栏的最后一组按钮中添加 */}
             <div className="flex gap-1">
                 <button 
-                   onClick={(e)=>{handleClickAnimation(e); formatCommands.link()}}
+                    onClick={(e)=>{handleClickAnimation(e); formatCommands.link()}}
                     className="p-1.5 rounded hover:bg-gray-100"
                     title="插入链接"
                 >
@@ -1064,6 +1065,13 @@ const closeTab = (tabId: string) => {
                     title="插入代码"
                 >
                     <Code size={16} />
+                </button>
+                <button 
+                    onClick={(e)=>{handleClickAnimation(e); formatCommands.more()}}
+                    className="p-1.5 rounded hover:bg-gray-100"
+                    title="插入摘要分隔符"
+                >
+                    <Scissors size={16} />
                 </button>
             </div>
         </div>
@@ -1096,10 +1104,11 @@ const closeTab = (tabId: string) => {
       </div>
       </div>
 
-      {/* 编辑器和预览区域的整体容器 */}
-      <div className="flex-1 flex">
-        {/* 左侧文件列表 */}
-        <div className="w-64 overflow-y-auto bg-white border-r">
+{/* 主编辑区域 */}
+<div className="flex-1 flex">
+        {/* 左侧面板：文件列表和FrontMatter编辑器 */}
+        <div className="w-64 flex-shrink-0 overflow-y-auto bg-white border-r">
+          {/* 文件列表 */}
           <div className="p-4">
             <h2 className="font-semibold mb-4 flex items-center gap-2 text-gray-700">
               <FolderOpen size={20} />
@@ -1111,140 +1120,101 @@ const closeTab = (tabId: string) => {
                   key={file.name}
                   draggable={file.type === 'image'}
                   onDragStart={(e) => handleFileDrag(e, file)}
-                  // 在文件列表项中更新右键菜单处理
+                  onClick={() => handleFileClick(file)}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     setContextMenu({
                       show: true,
                       x: e.clientX,
                       y: e.clientY,
-                      file: file
+                      file
                     });
                   }}
-                  onClick={() => file.type === 'markdown' && handleFileSelect(file.name)}
-                  className={`flex items-center gap-2 p-2 rounded cursor-pointer ${
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded cursor-pointer ${
                     currentFile === file.name 
                       ? 'bg-blue-50 text-blue-700' 
                       : 'hover:bg-gray-50 text-gray-600'
                   }`}
                 >
                   {file.type === 'markdown' ? (
-                    <File size={16} />
+                    <File size={14} />
                   ) : file.type === 'image' ? (
-                    <ImageIcon size={16} />
+                    <ImageIcon size={14} />
                   ) : (
-                    <File size={16} />
+                    <File size={14} />
                   )}
-                  <span className="truncate">{file.name}</span>
+                  <span className="truncate text-sm">{file.name}</span>
                 </div>
               ))}
             </div>
-
-            {/* 缺失资源提示 */}
-            {missingResources.length > 0 && !files.find(f => f.name === currentFile)?.isNew && (
-              <div className="mt-6 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                <h3 className="text-sm font-medium flex items-center gap-2 text-yellow-800 mb-2">
-                  <AlertCircle size={16} />
-                  缺失的资源文件
-                </h3>
-                <ul className="space-y-1">
-                  {missingResources.map(resource => (
-                    <li key={resource.name} className="text-sm text-yellow-700 flex items-center gap-2">
-                      {resource.type === 'image' ? <ImageIcon size={14} /> : <File size={14} />}
-                      {resource.name}
-                    </li>
-                  ))}
-                </ul>
-                <button
-                  onClick={(e) => {handleClickAnimation(e); resourceInputRef.current?.click()}}
-                  className="mt-2 w-full px-3 py-1 bg-yellow-100 text-yellow-800 rounded text-sm hover:bg-yellow-200"
-                >
-                  导入缺失文件
-                </button>
-              </div>
-            )}
           </div>
+
+          {/* FrontMatter编辑器 */}
+          {currentFile && (
+            <FrontMatterEditor
+              content={content}
+              onChange={setContent}
+              files={files}
+            />
+          )}
         </div>
 
-        {/* 右侧编辑器和预览区域 */}
+        {/* 右侧编辑和预览区域 */}
         <div className="flex-1 flex">
-          {/* 编辑器区域 */}
-          <div className="flex-1 flex flex-col">
-            <div className="flex-1 p-4">
-              <div 
-                className={`h-full relative border-2 rounded-lg bg-white ${
-                  isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300'
-                }`}
-              >
-                <textarea
-                  ref={editorRef}
-                  value={content}
-                  onChange={handleContentChange}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setIsDragging(true);
-                  }}
-                  onDragLeave={() => setIsDragging(false)}
-                  onDrop={handleEditorDrop}
-                  onPaste={handlePaste}
-                  className="w-full h-full resize-none focus:outline-none p-4 font-mono"
-                  placeholder="开始编辑..."
-                />
-                {isProcessing && (
-                  <div className="absolute inset-0 bg-white bg-opacity-50 flex items-center justify-center">
-                    <Loader2 className="animate-spin" />
-                  </div>
-                )}
-              </div>
-            </div>
+          {/* 编辑器 */}
+          <div className="flex-1 p-4 border-r">
+            <textarea
+              ref={editorRef}
+              value={content}
+              onChange={handleContentChange}
+              className="w-full h-full resize-none p-4 border rounded focus:border-blue-500 focus:outline-none font-mono text-sm"
+              onDrop={handleEditorDrop}
+              onDragOver={e => {
+                e.preventDefault();
+                setIsDragging(true);
+              }}
+              onDragLeave={() => setIsDragging(false)}
+            />
           </div>
 
-          {/* 预览区域 - 独立滚动 */}
+          {/* 预览 */}
           <div className="flex-1 p-4 overflow-y-auto">
-            <div className="min-h-full rounded-lg p-4 bg-white border">
+            <div className="prose max-w-none">
               <MarkdownPreview content={content} files={files} />
             </div>
           </div>
         </div>
       </div>
 
-      {/* 文件右键菜单 */}
+      {/* 其他组件（右键菜单、预览窗口等）保持不变 */}
       {contextMenu.show && contextMenu.file && (
-        <FileContextMenu
+        <CustomContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
-          file={contextMenu.file}
           onClose={() => setContextMenu(prev => ({ ...prev, show: false }))}
-          onDelete={handleDeleteFile}
-          onRename={handleRenameFile}
-          onSetCover={contextMenu.file.type === 'image' ? setCoverImage : undefined}
+          onDelete={() => handleDeleteFile(contextMenu.file!.name)}
+          onPreview={() => setPreviewFile(contextMenu.file!)}
+          onSetAsCover={
+            contextMenu.file.type === 'image'
+              ? () => setCoverImage(contextMenu.file!.name)
+              : undefined
+          }
+          isImage={contextMenu.file.type === 'image'}
         />
       )}
 
-      {/* 隐藏的文件输入 */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*,.md"
-        onChange={handleFileInputChange}        
-        className="hidden"
-        multiple
-      />
+      {previewFile && (
+        <FilePreview
+          file={previewFile}
+          onClose={() => setPreviewFile(null)}
+        />
+      )}
 
-      {/* 专门用于导入缺失资源的文件输入 */}
-      <input
-        ref={resourceInputRef}
-        type="file"
-        accept="*/*"
-        onChange={handleFileInputChange}
-        className="hidden"
-        multiple
-      />
-        {/* 添加图片转换对话框 */}
-        <ImageConversionDialog
+      {/* 图片转换对话框 */}
+      <ImageConversionDialog
         isOpen={imageConversionDialog.isOpen}
-        onClose={handleImageConversionCancel}
-        onConfirm={handleImageConversionConfirm}
+        onClose={() => handleImageConversionCancel()}
+        onConfirm={() => handleImageConversionConfirm()}
         imageInfo={
           imageConversionDialog.file
             ? {
@@ -1254,8 +1224,17 @@ const closeTab = (tabId: string) => {
             : null
         }
       />
+
+      {/* 隐藏的文件输入 */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*,.md"
+        onChange={handleFileInputChange}
+        className="hidden"
+        multiple
+      />
     </div>
-      
   );
 };
 
