@@ -15,6 +15,7 @@ import CustomContextMenu from './CustomContextMenu.tsx';
 import FrontMatterEditor from './FrontMatterEditor';
 import FilePreview from './FilePreview.tsx';
 
+
 // Interface definitions...
 interface WorkspaceFile {
   name: string;
@@ -659,7 +660,7 @@ const handleEditorDrop = async (e: React.DragEvent) => {
         setContent(content);
     
         // 检查资源引用
-        checkMissingResources(content);
+        checkMissingResources(content); 
     };
 
     // 处理文件选择
@@ -672,18 +673,29 @@ const handleEditorDrop = async (e: React.DragEvent) => {
     };
 
     
-    
-     // 更新当前文件内容
-     useEffect(() => {
-        setFiles(prev => prev.map(file => 
+    useEffect(() => {
+      if (!currentFile) return;
+      
+      setFiles(prev => prev.map(file => 
         file.name === currentFile 
-            ? { ...file, content } 
-            : file
-        ));
-        checkMissingResources(content);
-    }, [content, currentFile]);
+          ? { ...file, content } 
+          : file
+      ));
+      
+      const references = parseResourceReferences(content);
+      const existingFiles = new Set(files.map(f => f.name));
+      
+      const missing = references
+        .filter(ref => !existingFiles.has(ref))
+        .map(name => ({
+          name,
+          type: name.match(/\.(jpg|jpeg|png|gif|svg|webp)$/i) ? 'image' : 'other'
+        }));
+      
+      setMissingResources(missing);
+    }, [content, currentFile, files]);
 
-// 文件处理函数
+// 在 handleFiles 函数中修改非图片文件的处理部分
 const handleFiles = async (uploadedFiles: FileList): Promise<void> => {
   const imageFiles = Array.from(uploadedFiles).filter(isImageFile);
   const nonImageFiles = Array.from(uploadedFiles).filter(file => !isImageFile(file));
@@ -709,6 +721,18 @@ const handleFiles = async (uploadedFiles: FileList): Promise<void> => {
   for (const file of nonImageFiles) {
     if (file.name.endsWith('.md')) {
       const content = await file.text();
+      
+      // 先检查资源缺失
+      const references = parseResourceReferences(content);
+      const existingFiles = new Set(files.map(f => f.name));
+      
+      const missing = references
+        .filter(ref => !existingFiles.has(ref))
+        .map(name => ({
+          name,
+          type: name.match(/\.(jpg|jpeg|png|gif|svg|webp)$/i) ? 'image' : 'other'
+        }));
+      
       setFiles(prev => [...prev, {
         name: file.name,
         type: 'markdown',
@@ -724,6 +748,9 @@ const handleFiles = async (uploadedFiles: FileList): Promise<void> => {
       setTabs(prev => [...prev, newTab]);
       setActiveTab(newTab.id);
       setContent(content);
+      
+      // 设置缺失资源
+      setMissingResources(missing);
     }
   }
 };
@@ -1104,8 +1131,8 @@ const closeTab = (tabId: string) => {
       </div>
       </div>
 
-{/* 主编辑区域 */}
-<div className="flex-1 flex">
+      {/* 主编辑区域 */}
+      <div className="flex-1 flex">
         {/* 左侧面板：文件列表和FrontMatter编辑器 */}
         <div className="w-64 flex-shrink-0 overflow-y-auto bg-white border-r">
           {/* 文件列表 */}
@@ -1163,6 +1190,27 @@ const closeTab = (tabId: string) => {
         <div className="flex-1 flex">
           {/* 编辑器 */}
           <div className="flex-1 p-4 border-r">
+          {/* 添加缺失资源提示 */}
+          {missingResources.length > 0 && (
+            <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+              <div className="flex items-center gap-2 text-yellow-800 mb-2">
+                <AlertCircle size={16} />
+                <span className="font-medium">缺失的资源文件：</span>
+              </div>
+              <ul className="space-y-1">
+                {missingResources.map((resource) => (
+                  <li key={resource.name} className="text-sm text-yellow-700 flex items-center gap-2">
+                    {resource.type === 'image' ? (
+                      <ImageIcon size={14} />
+                    ) : (
+                      <File size={14} />
+                    )}
+                    {resource.name}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
             <textarea
               ref={editorRef}
               value={content}

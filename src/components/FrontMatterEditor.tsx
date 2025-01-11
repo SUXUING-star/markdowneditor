@@ -134,14 +134,14 @@ title: ${newFrontMatter.title}
         </label>
         <div className="flex gap-2">
           <button
-            onClick={() => handleCategoryChange('可汉')}
+            onClick={() => handleCategoryChange('有汉')}
             className={`px-2 py-1 text-sm rounded ${
-              frontMatter.categories.includes('可汉')
+              frontMatter.categories.includes('有汉')
                 ? 'bg-blue-500 text-white'
                 : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
             }`}
           >
-            可汉
+            有汉
           </button>
           <button
             onClick={() => handleCategoryChange('无汉')}
