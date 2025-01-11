@@ -1169,6 +1169,7 @@ const closeTab = (tabId: string) => {
               onChange={handleContentChange}
               className="w-full h-full resize-none p-4 border rounded focus:border-blue-500 focus:outline-none font-mono text-sm"
               onDrop={handleEditorDrop}
+              onPaste={handlePaste}
               onDragOver={e => {
                 e.preventDefault();
                 setIsDragging(true);
