@@ -1,8 +1,8 @@
 import React, { useMemo, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
-import rehypeSanitize from 'rehype-sanitize';
-
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';  // 修改这行
+import remarkGfm from 'remark-gfm';  // 添加这个导入
 const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({ content, files }) => {
   // 使用 Map 存储和管理图片 URL 缓存
   const blobUrlsRef = useRef<Map<string, string>>(new Map());
@@ -36,20 +36,22 @@ const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({ content, files }) => 
     return url;
   }, [files]);
 
-  // 渲染 Markdown 内容
-  const MarkdownComponent = useMemo(() => {
+   // 添加自定义组件配置
+   const MarkdownComponent = useMemo(() => {
     return ({ children }: { children: string }) => (
       <ReactMarkdown
         className="prose prose-sm w-full max-w-none"
-        rehypePlugins={[rehypeRaw, rehypeSanitize]}
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeRaw]}
         components={{
           img: ({ src, alt }) => {
             if (!src) return null;
             const isLocalImage = !src.startsWith('http');
             const imgSrc = isLocalImage ? getImageUrl(src) : src;
-
+          
             return (
-              <div className="my-4">
+              // 改用 figure 标签替代 div
+              <figure className="my-4">
                 <img
                   src={imgSrc}
                   alt={alt || ''}
@@ -61,16 +63,63 @@ const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({ content, files }) => 
                     target.alt = '图片加载失败';
                   }}
                 />
-                {alt && <p className="text-center text-sm text-gray-500 mt-1">{alt}</p>}
-              </div>
+                {alt && <figcaption className="text-center text-sm text-gray-500 mt-1">{alt}</figcaption>}
+              </figure>
             );
           },
+          em: ({ children }) => (
+            // 使用更强的样式组合
+            <em 
+              className="not-prose !italic" 
+              style={{ 
+                fontStyle: 'italic !important',
+                fontFamily: 'serif',
+              }}
+            >
+              {children}
+            </em>
+          ),
+          del: ({ children }) => (
+            <del className="line-through">{children}</del>
+          ),
+          p: ({ children }) => (
+            <p>{children}</p>
+          ),
+          h1: ({ children }) => (
+            <h1 className="text-2xl font-bold mt-6 mb-4">{children}</h1>
+          ),
+          h2: ({ children }) => (
+            <h2 className="text-xl font-bold mt-5 mb-3">{children}</h2>
+          ),
+          h3: ({ children }) => (
+            <h3 className="text-lg font-bold mt-4 mb-2">{children}</h3>
+          ),
+          ul: ({ children }) => (
+            <ul className="list-disc pl-6 mb-4">{children}</ul>
+          ),
+          ol: ({ children }) => (
+            <ol className="list-decimal pl-6 mb-4">{children}</ol>
+          ),
+          li: ({ children }) => (
+            <li className="mb-1">{children}</li>
+          ),
+          code: ({ inline, className, children }) => {
+            const match = /language-(\w+)/.exec(className || '');
+            return !inline ? (
+              <pre className="bg-gray-100 p-4 rounded overflow-x-auto">
+                <code className={className}>{children}</code>
+              </pre>
+            ) : (
+              <code className="bg-gray-100 px-1.5 py-0.5 rounded text-sm">{children}</code>
+            );
+          }
         }}
       >
         {children}
       </ReactMarkdown>
     );
   }, [getImageUrl]);
+  
 
   // Parse frontmatter and content
   const { hasFrontMatter, frontMatter, mainContent, coverImage } = useMemo(() => {
@@ -161,7 +210,7 @@ const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({ content, files }) => 
       )}
 
       {/* 渲染主要内容 */}
-      <div className="prose max-w-none">
+      <div className="prose prose-sm max-w-none [&_em]:italic">
         <MarkdownComponent>{mainContent}</MarkdownComponent>
       </div>
     </div>

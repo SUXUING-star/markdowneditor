@@ -2,7 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 :root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  /* 使用 Tailwind 的字体堆栈 */
+  font-family: theme('fontFamily.sans');
   line-height: 1.5;
   font-weight: 400;
   font-synthesis: none;
@@ -10,6 +11,31 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+
+/* 确保斜体效果 */
+em, .italic {
+  font-family: theme('fontFamily.serif');
+  font-style: italic !important;
+}
+
+/* 代码块使用等宽字体 */
+code, pre {
+  font-family: theme('fontFamily.mono');
+}
+
+em.italic {
+  font-style: italic !important;
+}
+/* 在现有样式后面添加 */
+.markdown-italic {
+  font-style: italic !important;
+}
+
+.prose em {
+  font-style: italic !important;
+}
+
 
 a {
   font-weight: 500;

@@ -110,6 +110,7 @@ title: ${newFrontMatter.title}
       updateContent(newFrontMatter);
     }
   };
+  const categories = ['有汉', '无汉', '其他']; // 添加"其他"选项
 
   return (
     <div className="border-t border-gray-200 pt-4 mt-4 px-4">
@@ -132,27 +133,20 @@ title: ${newFrontMatter.title}
         <label className="block text-sm font-medium text-gray-600 mb-1">
           分类
         </label>
-        <div className="flex gap-2">
-          <button
-            onClick={() => handleCategoryChange('有汉')}
-            className={`px-2 py-1 text-sm rounded ${
-              frontMatter.categories.includes('有汉')
-                ? 'bg-blue-500 text-white'
-                : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-            }`}
-          >
-            有汉
-          </button>
-          <button
-            onClick={() => handleCategoryChange('无汉')}
-            className={`px-2 py-1 text-sm rounded ${
-              frontMatter.categories.includes('无汉')
-                ? 'bg-blue-500 text-white'
-                : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-            }`}
-          >
-            无汉
-          </button>
+        <div className="flex gap-2 flex-wrap">
+          {categories.map(category => (
+            <button
+              key={category}
+              onClick={() => handleCategoryChange(category)}
+              className={`px-2 py-1 text-sm rounded ${
+                frontMatter.categories.includes(category)
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+              }`}
+            >
+              {category}
+            </button>
+          ))}
         </div>
       </div>
 

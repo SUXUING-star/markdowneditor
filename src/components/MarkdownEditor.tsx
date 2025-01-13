@@ -14,6 +14,7 @@ import ImageConversionDialog from './ImageConversionDialog';
 import CustomContextMenu from './CustomContextMenu.tsx';
 import FrontMatterEditor from './FrontMatterEditor';
 import FilePreview from './FilePreview.tsx';
+import QuickEditToolbar from './QuickEditToolbar';
 
 
 // Interface definitions...
@@ -78,6 +79,7 @@ const MarkdownEditor: React.FC = () => {
   const [previewFile, setPreviewFile] = useState<WorkspaceFile | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTab, setActiveTab] = useState<string>('');
+  const [cursorPosition, setCursorPosition] = useState<number>(0);
   const [missingResources, setMissingResources] = useState<MissingResource[]>([]); // 添加缺失资源状态
   const [contextMenu, setContextMenu] = useState<{
     show: boolean;
@@ -272,6 +274,7 @@ const handleRenameFile = (oldName: string, newName: string) => {
     setContent(updatedContent);
   }
 };
+
   // 修改图片转换确认处理函数
   const handleImageConversionConfirm = async () => {
     const { pendingFiles } = imageConversionDialog;
@@ -403,19 +406,21 @@ const handleRenameFile = (oldName: string, newName: string) => {
       }
   };
 
-    // 处理内容变化
-    const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      const newContent = e.target.value;
-      setContent(newContent);
-      addHistory(newContent, e.target.selectionStart);
-      
-      // 更新当前标签页
-      setTabs(prev => prev.map(tab => 
-        tab.id === activeTab
-          ? { ...tab, content: newContent }
-          : tab
-      ));
-    };
+// 修改现有的 handleContentChange
+const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+  const newContent = e.target.value;
+  const cursorPos = e.target.selectionStart; // 保存光标位置
+  
+  setContent(newContent);
+  addHistory(newContent, cursorPos);
+  
+  // 更新当前标签页
+  setTabs(prev => prev.map(tab => 
+    tab.id === activeTab
+      ? { ...tab, content: newContent }
+      : tab
+  ));
+};
     // 处理撤销
     const handleUndo = () => {
       const previousState = historyUndo();
@@ -503,69 +508,87 @@ const handleRenameFile = (oldName: string, newName: string) => {
       setMissingResources([]);
     };
 
-    // 设置封面图
-    const setCoverImage = (imageName: string) => {
-        const lines = content.split('\n');
-        const photosIndex = lines.findIndex(line => line.trim() === 'photos:');
-        
-        if (photosIndex !== -1) {
-            lines[photosIndex + 1] = `- ${imageName}`;
-            const newContent = lines.join('\n');
-            setContent(newContent);
-        
-            // 更新文件内容
-            setFiles(prev => prev.map(file => 
-                file.name === currentFile 
-                    ? { ...file, content: newContent }
-                    : file
-            ));
-        }
-    };
+  // 更新封面图设置处理
+  const setCoverImage = (imageName: string) => {
+    const lines = content.split('\n');
+    const photosIndex = lines.findIndex(line => line.trim() === 'photos:');
+    
+    if (photosIndex !== -1) {
+      lines[photosIndex + 1] = `- ${imageName}`;
+      const newContent = lines.join('\n');
+      setContent(newContent);
+      
+      // 同步更新文件内容和历史记录
+      setFiles(prev => prev.map(file => 
+        file.name === currentFile 
+          ? { ...file, content: newContent }
+          : file
+      ));
+      addHistory(newContent, editorRef.current?.selectionStart || 0);
+    }
+  };
 
-   // 处理文件拖拽相关的事件
-    const handleFileDrag = (e: React.DragEvent, file: WorkspaceFile) => {
-        e.dataTransfer.setData('text/plain', file.name);
-        e.dataTransfer.setData('application/json', JSON.stringify(file));
-    };
+   // 处理文件拖拽
+const handleFileDrag = (e: React.DragEvent, file: WorkspaceFile) => {
+  e.dataTransfer.setData('text/plain', file.name);
+  e.dataTransfer.effectAllowed = 'copy';
+};
+  // 修改文件列表区域的拖放处理
+  const handleFileListDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    const droppedFiles = e.dataTransfer.files;
+    if (droppedFiles.length > 0) {
+      handleFiles(droppedFiles);
+    }
+  };
 
-    // 修改 handleEditorDrop 函数
+  const handleFileListDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.currentTarget.classList.add('bg-blue-50');
+  };
+
+  const handleFileListDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.currentTarget.classList.remove('bg-blue-50');
+  };
+
+// 处理编辑器的拖放
 const handleEditorDrop = async (e: React.DragEvent) => {
   e.preventDefault();
   setIsDragging(false);
 
-  // 获取拖拽的文件信息
-  const fileData = e.dataTransfer.getData('application/json');
+  const fileData = e.dataTransfer.getData('text/plain');
   if (fileData) {
-    try {
-      const file = JSON.parse(fileData) as WorkspaceFile;
-      if (file.type === 'image') {
-        const textarea = editorRef.current;
-        if (textarea) {
-          const start = textarea.selectionStart;
-          const end = textarea.selectionEnd;
-          // 使用不带扩展名的文件名作为 alt
-          const baseName = file.name.split('.')[0];
-          const imageText = `![${baseName}](${file.name})`;
-          
-          const newContent = content.substring(0, start) + imageText + content.substring(end);
-          setContent(newContent);
-          
-          // 更新历史和标签页
-          addHistory(newContent, start + imageText.length);
-          setTabs(prev => prev.map(tab => 
-            tab.id === activeTab ? { ...tab, content: newContent } : tab
-          ));
-          
-          setTimeout(() => {
-            textarea.selectionStart = textarea.selectionEnd = start + imageText.length;
-            textarea.focus();
-          }, 0);
-        }
+    const draggedFile = files.find(f => f.name === fileData);
+    if (draggedFile && draggedFile.type === 'image') {
+      const textarea = editorRef.current;
+      if (textarea) {
+        // 使用当前文本框的选择位置
+        const insertAt = textarea.selectionStart;
+        const baseName = draggedFile.name.split('.')[0];
+        const imageText = `![${baseName}](${draggedFile.name})`;
+        
+        const newContent = content.substring(0, insertAt) + 
+                         imageText + 
+                         content.substring(insertAt);
+        
+        setContent(newContent);
+        addHistory(newContent, insertAt + imageText.length);
+        
+        // 更新标签页
+        setTabs(prev => prev.map(tab => 
+          tab.id === activeTab ? { ...tab, content: newContent } : tab
+        ));
+        
+        // 更新光标位置
+        setTimeout(() => {
+          textarea.focus();
+          const newPosition = insertAt + imageText.length;
+          textarea.setSelectionRange(newPosition, newPosition);
+        }, 0);
       }
-    } catch (error) {
-      console.error('Error parsing dragged file data:', error);
+      return;
     }
-    return;
   }
 
   // 处理外部文件拖拽
@@ -676,14 +699,18 @@ const handleEditorDrop = async (e: React.DragEvent) => {
     useEffect(() => {
       if (!currentFile) return;
       
-      setFiles(prev => prev.map(file => 
-        file.name === currentFile 
-          ? { ...file, content } 
-          : file
-      ));
-      
-      const references = parseResourceReferences(content);
       const existingFiles = new Set(files.map(f => f.name));
+      const references = parseResourceReferences(content);
+      
+      // 只有当内容真正改变时才更新文件
+      const currentFileContent = files.find(f => f.name === currentFile)?.content;
+      if (currentFileContent !== content) {
+        setFiles(prev => prev.map(file => 
+          file.name === currentFile 
+            ? { ...file, content } 
+            : file
+        ));
+      }
       
       const missing = references
         .filter(ref => !existingFiles.has(ref))
@@ -693,7 +720,7 @@ const handleEditorDrop = async (e: React.DragEvent) => {
         }));
       
       setMissingResources(missing);
-    }, [content, currentFile, files]);
+    }, [content, currentFile]); // 移除 files 依赖
 
 // 在 handleFiles 函数中修改非图片文件的处理部分
 const handleFiles = async (uploadedFiles: FileList): Promise<void> => {
@@ -762,42 +789,100 @@ const handleFiles = async (uploadedFiles: FileList): Promise<void> => {
     }
   };
   // 在光标位置插入文本
-    const insertText = (before: string, after: string = '') => {
-        const textarea = editorRef.current;
-        if (!textarea) return;
+  const insertText = (before: string, after: string = '') => {
+    const textarea = editorRef.current;
+    if (!textarea) return;
+
+    // 保存编辑器的滚动位置，而不是窗口的滚动位置
+    const editorScrollTop = textarea.scrollTop;
+    const editorScrollLeft = textarea.scrollLeft;
+    const documentScrollTop = window.scrollY;
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const selectedText = content.substring(start, end);
+    const newText = before + selectedText + after;
     
-        const start = textarea.selectionStart;
-        const end = textarea.selectionEnd;
-        const selectedText = content.substring(start, end);
-        const newText = before + selectedText + after;
+    const newContent = content.substring(0, start) + newText + content.substring(end);
+    
+    // 先更新内容
+    setContent(newContent);
+    addToHistory(newContent);
+
+    // 使用 RAF 确保在下一帧更新位置
+    requestAnimationFrame(() => {
+        // 恢复编辑器滚动位置
+        textarea.scrollTop = editorScrollTop;
+        textarea.scrollLeft = editorScrollLeft;
+        // 恢复文档滚动位置
+        window.scrollTo(0, documentScrollTop);
         
-        const newContent = content.substring(0, start) + newText + content.substring(end);
-        setContent(newContent);
-          // 添加到历史记录
-        addToHistory(newContent);
-          
-        setTimeout(() => {
+        // 设置光标位置
         textarea.focus();
         textarea.setSelectionRange(
-              start + before.length,
+            start + before.length,
             end + before.length
-          );
-        }, 0);
-    };
+        );
+    });
+};
       
-    const formatCommands = {
-      bold: () => insertText('**', '**'),
-      italic: () => insertText('*', '*'),
-      strikethrough: () => insertText('~~', '~~'),
-      h1: () => insertText('# '),
-      h2: () => insertText('## '),
-      h3: () => insertText('### '),
-      orderedList: () => insertText('1. '),
-      unorderedList: () => insertText('- '),
-      link: () => insertText('[', '](url)'),
-      code: () => insertText('`', '`'),
-      more: () => insertText('\n<!--more-->\n')  // 添加摘要分隔符命令
-    };
+const formatCommands = {
+  bold: () => {
+      const scrollPosition = window.scrollY;
+      insertText('**', '**');
+      requestAnimationFrame(() => window.scrollTo(0, scrollPosition));
+  },
+  italic: () => {
+      const scrollPosition = window.scrollY;
+      insertText('*', '*');
+      requestAnimationFrame(() => window.scrollTo(0, scrollPosition));
+  },
+  strikethrough: () => {
+      const scrollPosition = window.scrollY;
+      insertText('~~', '~~');
+      requestAnimationFrame(() => window.scrollTo(0, scrollPosition));
+  },
+  h1: () => {
+      const scrollPosition = window.scrollY;
+      insertText('# ');
+      requestAnimationFrame(() => window.scrollTo(0, scrollPosition));
+  },
+  h2: () => {
+      const scrollPosition = window.scrollY;
+      insertText('## ');
+      requestAnimationFrame(() => window.scrollTo(0, scrollPosition));
+  },
+  h3: () => {
+      const scrollPosition = window.scrollY;
+      insertText('### ');
+      requestAnimationFrame(() => window.scrollTo(0, scrollPosition));
+  },
+  orderedList: () => {
+      const scrollPosition = window.scrollY;
+      insertText('1. ');
+      requestAnimationFrame(() => window.scrollTo(0, scrollPosition));
+  },
+  unorderedList: () => {
+      const scrollPosition = window.scrollY;
+      insertText('- ');
+      requestAnimationFrame(() => window.scrollTo(0, scrollPosition));
+  },
+  link: () => {
+      const scrollPosition = window.scrollY;
+      insertText('[', '](url)');
+      requestAnimationFrame(() => window.scrollTo(0, scrollPosition));
+  },
+  code: () => {
+      const scrollPosition = window.scrollY;
+      insertText('`', '`');
+      requestAnimationFrame(() => window.scrollTo(0, scrollPosition));
+  },
+  more: () => {
+      const scrollPosition = window.scrollY;
+      insertText('\n<!--more-->\n');
+      requestAnimationFrame(() => window.scrollTo(0, scrollPosition));
+  }
+};
     
     
     // 下载工作文件夹
@@ -944,298 +1029,142 @@ const closeTab = (tabId: string) => {
 
   return (
     <div className="h-screen flex flex-col">        {/* 顶部工具栏 */}
-      <div className="p-4 border-b flex flex-col gap-2 bg-white shadow-sm toolbar-container" style={{display:'flex', alignItems:'center'}}>
-          {/* 主要操作按钮 */}
-          <div className="flex justify-center items-center w-full">
-            <div className="flex gap-4">
-                <button 
-                    onClick={(e) => {handleClickAnimation(e); createNewFile()}}
-                    className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 flex items-center gap-2"
-                >
-                    <Plus size={16} />
-                    新建文档
-                </button>
-                <button 
-                    onClick={(e) => {handleClickAnimation(e); fileInputRef.current?.click()}}
-                    className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center gap-2"
-                >
-                    <Upload size={16} />
-                    导入文件
-                </button>
-                <button 
-                    onClick={(e) => {handleClickAnimation(e); downloadWorkspace()}}
-                    className="px-4 py-2 bg-indigo-500 text-white rounded hover:bg-indigo-600 flex items-center gap-2"
-                >
-                    <Download size={16} />
-                    下载工作区
-                </button>
-            </div>
-        </div>
-  
-         {/* 编辑工具栏 */}
-        <div className="flex items-center gap-2 border-t pt-2 justify-center">
-          {/* ... 其他工具栏内容 ... */}
-          <HistoryManager
-            content={content}
-            onContentChange={(newContent) => {
-              setContent(newContent);
-              setTabs(prev => prev.map(tab => 
-                tab.id === activeTab
-                  ? { ...tab, content: newContent }
-                  : tab
-              ));
-            }}
-            className="border-r pr-2"
-            disabled={!currentFile}
-          />
-          <div className="flex gap-1 border-r pr-2">
-            <button 
-              onClick={(e)=>{handleClickAnimation(e); handleUndo()}}
-              className={`p-1.5 rounded ${
-                canUndo ? 'hover:bg-gray-100 text-gray-700' : 'text-gray-300 cursor-not-allowed'
-              }`}
-              disabled={!canUndo}
-              title="撤销 (Ctrl+Z)"
-            >
-              <Undo size={16} />
-            </button>
-            <button 
-              onClick={(e)=>{handleClickAnimation(e); handleRedo()}}
-              className={`p-1.5 rounded ${
-                canRedo ? 'hover:bg-gray-100 text-gray-700' : 'text-gray-300 cursor-not-allowed'
-              }`}
-              disabled={!canRedo}
-              title="重做 (Ctrl+Y)"
-            >
-                  <Redo size={16} />
-              </button>
-          </div>
-          
-              
-          <div className="flex gap-1 border-r pr-2">
-                <button 
-                    onClick={(e)=>{handleClickAnimation(e); formatCommands.h1()}}
-                    className="p-1.5 rounded hover:bg-gray-100"
-                    title="一级标题"
-                >
-                    <Heading1 size={16} />
-                </button>
-                <button 
-                   onClick={(e)=>{handleClickAnimation(e); formatCommands.h2()}}
-                    className="p-1.5 rounded hover:bg-gray-100"
-                    title="二级标题"
-                >
-                    <Heading2 size={16} />
-                </button>
-                <button 
-                   onClick={(e)=>{handleClickAnimation(e); formatCommands.h3()}}
-                    className="p-1.5 rounded hover:bg-gray-100"
-                    title="三级标题"
-                >
-                    <Heading3 size={16} />
-                </button>
-            </div>
-              
-          <div className="flex gap-1 border-r pr-2">
-                <button 
-                   onClick={(e)=>{handleClickAnimation(e); formatCommands.bold()}}
-                    className="p-1.5 rounded hover:bg-gray-100"
-                    title="加粗 (Ctrl+B)"
-                >
-                    <Bold size={16} />
-                </button>
-                <button 
-                   onClick={(e)=>{handleClickAnimation(e); formatCommands.italic()}}
-                    className="p-1.5 rounded hover:bg-gray-100"
-                    title="斜体 (Ctrl+I)"
-                >
-                    <Italic size={16} />
-                </button>
-                <button 
-                  onClick={(e)=>{handleClickAnimation(e); formatCommands.strikethrough()}}
-                    className="p-1.5 rounded hover:bg-gray-100"
-                    title="删除线"
-                >
-                    <Strikethrough size={16} />
-                </button>
-            </div>
-              
-            <div className="flex gap-1 border-r pr-2">
-                <button 
-                   onClick={(e)=>{handleClickAnimation(e); formatCommands.unorderedList()}}
-                    className="p-1.5 rounded hover:bg-gray-100"
-                    title="无序列表"
-                >
-                    <List size={16} />
-                </button>
-                <button 
-                    onClick={(e)=>{handleClickAnimation(e); formatCommands.orderedList()}}
-                    className="p-1.5 rounded hover:bg-gray-100"
-                    title="有序列表"
-                >
-                    <ListOrdered size={16} />
-                </button>
-            </div>
-              
-            {/* 在工具栏的最后一组按钮中添加 */}
-            <div className="flex gap-1">
-                <button 
-                    onClick={(e)=>{handleClickAnimation(e); formatCommands.link()}}
-                    className="p-1.5 rounded hover:bg-gray-100"
-                    title="插入链接"
-                >
-                    <Link size={16} />
-                </button>
-                <button 
-                    onClick={(e)=>{handleClickAnimation(e); formatCommands.code()}}
-                    className="p-1.5 rounded hover:bg-gray-100"
-                    title="插入代码"
-                >
-                    <Code size={16} />
-                </button>
-                <button 
-                    onClick={(e)=>{handleClickAnimation(e); formatCommands.more()}}
-                    className="p-1.5 rounded hover:bg-gray-100"
-                    title="插入摘要分隔符"
-                >
-                    <Scissors size={16} />
-                </button>
-            </div>
-        </div>
-    
-         {/* 标签页 */}
-      <div className="flex gap-2 overflow-x-auto pt-2 border-t justify-center">
-        {tabs.map(tab => (
-          <div
-            key={tab.id}
-            onClick={() => switchTab(tab.id)}
-            className={`flex items-center gap-2 px-3 py-1 rounded-t cursor-pointer ${
-              activeTab === tab.id
-                ? 'bg-blue-50 text-blue-700'
-                : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
-            }`}
-          >
-            <File size={14} />
-            <span>{tab.fileName}</span>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                closeTab(tab.id);
-              }}
-              className="ml-2 hover:bg-gray-200 rounded-full p-0.5"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        ))}
-      </div>
-      </div>
+      {/* 替换原有工具栏 */}
+      <QuickEditToolbar
+        onFormatCommand={(command) => {
+            const commandFn = formatCommands[command as keyof typeof formatCommands];
+            if (commandFn) {
+                const scrollPosition = window.scrollY;
+                commandFn();
+                requestAnimationFrame(() => window.scrollTo(0, scrollPosition));
+            }
+        }}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+        onNewFile={createNewFile}
+        onImportFile={() => fileInputRef.current?.click()}
+        onDownloadWorkspace={downloadWorkspace}
+      />
+
 
       {/* 主编辑区域 */}
       <div className="flex-1 flex">
-        {/* 左侧面板：文件列表和FrontMatter编辑器 */}
-        <div className="w-64 flex-shrink-0 overflow-y-auto bg-white border-r">
-          {/* 文件列表 */}
-          <div className="p-4">
-            <h2 className="font-semibold mb-4 flex items-center gap-2 text-gray-700">
-              <FolderOpen size={20} />
-              工作文件夹
-            </h2>
-            <div className="space-y-1">
-              {files.map(file => (
-                <div 
-                  key={file.name}
-                  draggable={file.type === 'image'}
-                  onDragStart={(e) => handleFileDrag(e, file)}
-                  onClick={() => handleFileClick(file)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setContextMenu({
-                      show: true,
-                      x: e.clientX,
-                      y: e.clientY,
-                      file
-                    });
-                  }}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded cursor-pointer ${
-                    currentFile === file.name 
-                      ? 'bg-blue-50 text-blue-700' 
-                      : 'hover:bg-gray-50 text-gray-600'
-                  }`}
-                >
-                  {file.type === 'markdown' ? (
-                    <File size={14} />
-                  ) : file.type === 'image' ? (
-                    <ImageIcon size={14} />
-                  ) : (
-                    <File size={14} />
-                  )}
-                  <span className="truncate text-sm">{file.name}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* FrontMatter编辑器 */}
-          {currentFile && (
-            <FrontMatterEditor
-              content={content}
-              onChange={setContent}
-              files={files}
-            />
-          )}
-        </div>
-
-        {/* 右侧编辑和预览区域 */}
-        <div className="flex-1 flex">
-          {/* 编辑器 */}
-          <div className="flex-1 p-4 border-r">
-          {/* 添加缺失资源提示 */}
-          {missingResources.length > 0 && (
-            <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
-              <div className="flex items-center gap-2 text-yellow-800 mb-2">
-                <AlertCircle size={16} />
-                <span className="font-medium">缺失的资源文件：</span>
-              </div>
-              <ul className="space-y-1">
-                {missingResources.map((resource) => (
-                  <li key={resource.name} className="text-sm text-yellow-700 flex items-center gap-2">
-                    {resource.type === 'image' ? (
+        {/* 左侧面板：可拖放的文件列表和FrontMatter编辑器 */}
+        <div className="sticky top-[120px] w-64 flex-shrink-0 flex flex-col max-h-[calc(100vh-120px)] bg-white border-r">
+        {/* 文件列表区域 */}
+          <div 
+            className="flex-1 overflow-y-auto"
+            onDrop={handleFileListDrop}
+            onDragOver={handleFileListDragOver}
+            onDragLeave={handleFileListDragLeave}
+          >
+            <div className="p-4">
+              <h2 className="font-semibold mb-4 flex items-center gap-2 text-gray-700">
+                <FolderOpen size={20} />
+                工作文件夹
+                <span className="text-xs text-gray-500">(可拖放文件至此处)</span>
+              </h2>
+              <div className="space-y-1">
+                {files.map(file => (
+                  <div 
+                    key={file.name}
+                    draggable={file.type === 'image'}
+                    onDragStart={(e) => handleFileDrag(e, file)}
+                    onClick={() => handleFileClick(file)}
+                    onContextMenu={(e) => handleContextMenu(e, file)}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded cursor-pointer ${
+                      currentFile === file.name 
+                        ? 'bg-blue-50 text-blue-700' 
+                        : 'hover:bg-gray-50 text-gray-600'
+                    }`}
+                  >
+                    {file.type === 'markdown' ? (
+                      <File size={14} />
+                    ) : file.type === 'image' ? (
                       <ImageIcon size={14} />
                     ) : (
                       <File size={14} />
                     )}
-                    {resource.name}
-                  </li>
+                    <span className="truncate text-sm">{file.name}</span>
+                  </div>
                 ))}
-              </ul>
+              </div>
+            </div>
+          </div>
+
+          {/* FrontMatter编辑器区域 */}
+          {currentFile && (
+            <div className="border-t">
+              <FrontMatterEditor
+                content={content}
+                onChange={(newContent) => {
+                  setContent(newContent);
+                  addHistory(newContent, editorRef.current?.selectionStart || 0);
+                  
+                  setFiles(prev => prev.map(file => 
+                    file.name === currentFile 
+                      ? { ...file, content: newContent }
+                      : file
+                  ));
+                }}
+                files={files}
+              />
             </div>
           )}
+        </div>
+
+        {/* 编辑器和预览区域的容器 */}
+        <div className="flex-1 flex h-[calc(100vh-120px)]">  {/* 添加固定高度 */}
+          {/* 编辑器区域 */}
+          <div className="flex-1 flex flex-col p-4 border-r overflow-hidden"> {/* 修改这里 */}
+            {missingResources.length > 0 && (
+              <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+                <div className="flex items-center gap-2 text-yellow-800 mb-2">
+                  <AlertCircle size={16} />
+                  <span className="font-medium">缺失的资源文件：</span>
+                </div>
+                <ul className="space-y-1">
+                  {missingResources.map((resource) => (
+                    <li key={resource.name} className="text-sm text-yellow-700 flex items-center gap-2">
+                      {resource.type === 'image' ? (
+                        <ImageIcon size={14} />
+                      ) : (
+                        <File size={14} />
+                      )}
+                      {resource.name}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <textarea
               ref={editorRef}
               value={content}
               onChange={handleContentChange}
-              className="w-full h-full resize-none p-4 border rounded focus:border-blue-500 focus:outline-none font-mono text-sm"
               onDrop={handleEditorDrop}
               onPaste={handlePaste}
-              onDragOver={e => {
+              onDragOver={(e) => {
                 e.preventDefault();
                 setIsDragging(true);
               }}
               onDragLeave={() => setIsDragging(false)}
+              className={`flex-1 resize-none p-4 border rounded focus:border-blue-500 focus:outline-none font-mono text-sm overflow-y-auto ${
+                isDragging ? 'bg-blue-50' : ''
+              }`}
+              placeholder="开始编写..."
             />
           </div>
 
-          {/* 预览 */}
-          <div className="flex-1 p-4 overflow-y-auto">
-            <div className="prose max-w-none">
-              <MarkdownPreview content={content} files={files} />
-            </div>
+          {/* 预览区域 */}
+          <div className="flex-1 p-4 overflow-y-auto bg-white">
+            <MarkdownPreview content={content} files={files} />
           </div>
         </div>
       </div>
 
-      {/* 其他组件（右键菜单、预览窗口等）保持不变 */}
+      {/* 上下文菜单和对话框 */}
       {contextMenu.show && contextMenu.file && (
         <CustomContextMenu
           x={contextMenu.x}
