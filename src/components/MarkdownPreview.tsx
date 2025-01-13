@@ -3,6 +3,18 @@ import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';  // 修改这行
 import remarkGfm from 'remark-gfm';  // 添加这个导入
+// 首先添加类型定义
+interface FrontMatterData {
+  title: string;
+  date: string;
+  categories: string[];
+  tags: string[];
+  topped: boolean;
+}
+interface MarkdownPreviewProps {
+  content: string;
+  files: Array<{ name: string; content: string | ArrayBuffer }>;
+}
 const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({ content, files }) => {
   // 使用 Map 存储和管理图片 URL 缓存
   const blobUrlsRef = useRef<Map<string, string>>(new Map());
@@ -122,35 +134,57 @@ const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({ content, files }) => 
   
 
   // Parse frontmatter and content
-  const { hasFrontMatter, frontMatter, mainContent, coverImage } = useMemo(() => {
+  const { hasFrontMatter, frontMatter, mainContent, coverImage, frontMatterData } = useMemo(() => {
     const parts = content.split(/---\n/);
     const hasFrontMatter = parts.length >= 3;
     const frontMatter = hasFrontMatter ? parts[1] : '';
     const mainContent = hasFrontMatter ? parts.slice(2).join('---\n') : content;
-
+  
     const getCoverImage = (): string | null => {
       const match = frontMatter.match(/photos:\s*\n\s*-\s*([^\s].+)/);
       return match ? match[1].trim() : null;
     };
-
+  
+    // 解析 frontmatter 中的列表字段
+    const getFrontMatterList = (field: string): string[] => {
+      const regex = new RegExp(`${field}:\\s*\\n(?:-\\s*([^\\n]+)\\s*\\n?)*`, 'gm');
+      const match = frontMatter.match(regex);
+      if (!match) return [];
+      
+      return match[0].split('\n')
+        .filter(line => line.trim().startsWith('-'))
+        .map(line => line.replace(/^-\s*/, '').trim())
+        .filter(Boolean);
+    };
+  
+    // 解析常规字段
+    const getField = (field: string): string => {
+      const regex = new RegExp(`${field}:\\s*(.+)`, 'i');
+      const match = frontMatter.match(regex);
+      return match ? match[1].trim() : '';
+    };
+  
+    const frontMatterData: FrontMatterData = {
+      title: getField('title'),
+      date: getField('date'),
+      categories: getFrontMatterList('categories'),
+      tags: getFrontMatterList('tags'),
+      topped: frontMatter.includes('topped: true')
+    };
+  
     return {
       hasFrontMatter,
       frontMatter,
       mainContent,
-      coverImage: getCoverImage()
+      coverImage: getCoverImage(),
+      frontMatterData
     };
   }, [content]);
-
-  if (!content.trim()) {
-    return (
-      <div className="text-gray-400 italic">
-        预览内容将显示在这里...
-      </div>
-    );
-  }
+  
+  // 修改渲染部分，保留原有的封面图渲染，增加新的 frontmatter 显示
   return (
     <div className="markdown-preview">
-      {/* 渲染封面图 */}
+      {/* 保持原有的封面图渲染 */}
       {coverImage && (
         <div className="mb-6">
           <div className="aspect-video w-full relative bg-gray-100 rounded overflow-hidden">
@@ -168,47 +202,65 @@ const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({ content, files }) => 
           </div>
         </div>
       )}
-
+  
       {/* 渲染 front matter */}
       {hasFrontMatter && (
         <div className="mb-6 p-4 bg-gray-50 rounded border border-gray-200">
-          <div className="font-mono text-sm space-y-1">
-            {/* 分类 */}
-            <div className="flex gap-2">
-              <span className="text-gray-500">分类:</span>
-              {frontMatter.match(/categories:\s*\n-\s*(.+)/)?.[1] || '未设置'}
-            </div>
-            
-            {/* 标签 */}
-            <div className="flex gap-2">
-              <span className="text-gray-500">标签:</span>
-              <div className="flex flex-wrap gap-1">
-                {(frontMatter.match(/tags:\s*\n(?:-\s*(.+)\s*\n?)*/g) || [])
-                  .map(tag => tag.replace(/tags:\s*\n-\s*/, '').trim())
-                  .filter(Boolean)
-                  .map((tag, index) => (
-                    <span key={index} className="px-2 py-0.5 bg-gray-200 rounded-full text-xs">
-                      {tag}
-                    </span>
-                  ))}
-              </div>
-            </div>
-            
+          <div className="font-mono text-sm space-y-2">
             {/* 标题 */}
             <div className="flex gap-2">
-              <span className="text-gray-500">标题:</span>
-              {frontMatter.match(/title:\s*(.+)/)?.[1] || '未设置'}
+              <span className="text-gray-500 min-w-[3em]">标题:</span>
+              <span>{frontMatterData.title || '未设置'}</span>
             </div>
             
             {/* 日期 */}
             <div className="flex gap-2">
-              <span className="text-gray-500">日期:</span>
-              {frontMatter.match(/date:\s*(.+)/)?.[1] || '未设置'}
+              <span className="text-gray-500 min-w-[3em]">日期:</span>
+              <span>{frontMatterData.date || '未设置'}</span>
             </div>
+  
+            {/* 分类 */}
+            <div className="flex gap-2">
+              <span className="text-gray-500 min-w-[3em]">分类:</span>
+              <div className="flex flex-wrap gap-1">
+                {frontMatterData.categories.length > 0 ? (
+                  frontMatterData.categories.map((category, index) => (
+                    <span key={index} className="px-2 py-0.5 bg-gray-200 rounded-full text-xs">
+                      {category}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-gray-400">未设置</span>
+                )}
+              </div>
+            </div>
+            
+            {/* 标签 */}
+            <div className="flex gap-2">
+              <span className="text-gray-500 min-w-[3em]">标签:</span>
+              <div className="flex flex-wrap gap-1">
+                {frontMatterData.tags.length > 0 ? (
+                  frontMatterData.tags.map((tag, index) => (
+                    <span key={index} className="px-2 py-0.5 bg-gray-200 rounded-full text-xs">
+                      {tag}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-gray-400">未设置</span>
+                )}
+              </div>
+            </div>
+  
+            {/* 是否置顶 */}
+            {frontMatterData.topped && (
+              <div className="flex gap-2">
+                <span className="text-rose-500">📌 置顶文章</span>
+              </div>
+            )}
           </div>
         </div>
       )}
-
+  
       {/* 渲染主要内容 */}
       <div className="prose prose-sm max-w-none [&_em]:italic">
         <MarkdownComponent>{mainContent}</MarkdownComponent>
